@@ -1,4 +1,4 @@
-## chapter 5 Rvalue References, Move Semantics, and Perfect Forwarding
+## Chapter 5 Rvalue References, Move Semantics, and Perfect Forwarding
 
 ### Item 23: Understand std::move and std::forward
 
@@ -618,3 +618,105 @@ h.totalLength是non-const bitfield，fwd的参数是reference，c++标准要求
 
 	auto length = static_cast<std::uint16_t>(h.totalLength); // 拷贝bitfield值
 	fwd(length); // forward这个拷贝
+
+
+
+## Chapter 6: Lambda Expressions
+
+Lambda expression只是一个expression
+
+closure是lambda创建的runtime对象，持有captured data的拷贝或者引用
+
+closure class是用以实例化closure的类，编译器为每一个lambda产生一个独一无二的closure class
+
+一个单独的lambda可以对应一个closure type的多个closure（closure可以）
+
+编译期：lambda，closure classs
+运行期：closure
+
+### Item 31: Avoid default capture modes.
+
+C++11的capture mode有by-reference和by-value两种。by-reference可能产生悬空引用，by-value不一定self-contained
+
+by-reference的悬空引用
+
+	using FilterContainer = std::vector<std::function<bool(int)>>;
+	FilterContainer filters;
+	filters.emplace_back([](int value) { return value % 5 == 0; } ); // filter函数容器添加一个函数
+	
+使用
+
+	void addDivisorFilter()
+	{
+		auto divisor = …;
+		filters.emplace_back([&](int value) { return value % divisor == 0; }); // divisor会变为悬空指针
+		filters.emplace_back([&divisor](int value) { return value % divisor == 0; }); // divisor会变为悬空指针
+	}
+
+相比默认方式[&]而言，显式列出lambda中的局部变量[&divisor]会容易发现这个lambda依赖于这个引用并可能悬空
+
+将divisor修改为by-value capture防止悬空引用
+
+	filters.emplace_back([=](int value) { return value % divisor == 0; }); // divisor为by-value capture
+
+lambda只能使用于在定义该lambda的作用域内可见的non-static local variable（包含参数）。类的non-static成员变量在访问时通过隐式添加this指针，因此lambda中的[=]只能捕获this指针，使用non-static成员变量的方式为
+
+	void Widget::addFilter() const
+	{
+		auto currentObjectPtr = this; // 获得this指针
+		filters.emplace_back(
+			[currentObjectPtr](int value) // 捕获this指针
+			{ return value % currentObjectPtr->divisor == 0; } );
+	}
+	
+this变量生存期
+
+	using FilterContainer = std::vector<std::function<bool(int)>>;
+	FilterContainer filters;
+	void doSomeWork() {
+		auto pw = std::make_unique<Widget>(); 
+		pw->addFilter(); // addFilter中的lambda捕获了pw的this指针存入filters
+	}
+	// 这里pw失效，filters中的捕获pw的this的lambda产生悬空指针
+	
+使用by-value捕获pw->divisor，将addFilter改为
+
+	void Widget::addFilter() const {
+		auto divisorCopy = divisor; // copy data member
+		filters.emplace_back(
+			[divisorCopy](int value) // capture the copy
+			{ return value % divisorCopy == 0; } // use the copy
+		);
+	}
+
+使用默认by-value capture同样正确（不推荐）A default capture mode is what made it possible to accidentally capture this when you thought you were capturing divisor in the first place.？？？
+
+	void Widget::addFilter() const {
+		auto divisorCopy = divisor; // copy data member
+		filters.emplace_back(
+			[=](int value) { return value % divisorCopy == 0; } // use the copy
+		);
+	}
+
+C++14中generalized lambda capture可以捕获成员变量
+
+	void Widget::addFilter() const
+	{
+		filters.emplace_back( // C++14:
+			[divisor = divisor](int value) // copy divisor to closure
+			{ return value % divisor == 0; } // use the copy
+		);
+	}
+
+lambda不仅依赖于（可捕获的）局部变量和参数，还依赖于（不可捕获的）objects with static storage duration（定义在全局或名空间作用域下的对象，或者在类、函数、文件中声明为static的对象），因此by-value capture的lambda并不一定self-contained
+
+void addDivisorFilter()
+{
+	static auto divisor = …;
+	filters.emplace_back(
+		[=](int value) // captures nothing!，并没有对任何对象作出by-value capture
+		{ return value % divisor == 0; } // refers to above static
+	);
+	++divisor;
+}
+
