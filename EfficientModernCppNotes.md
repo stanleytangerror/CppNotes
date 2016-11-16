@@ -1,4 +1,4 @@
-## Chapter 5 Rvalue References, Move Semantics, and Perfect Forwarding
+## Chapter 5: Rvalue References, Move Semantics, and Perfect Forwarding
 
 ### Item 23: Understand std::move and std::forward
 
@@ -710,13 +710,241 @@ C++14中generalized lambda capture可以捕获成员变量
 
 lambda不仅依赖于（可捕获的）局部变量和参数，还依赖于（不可捕获的）objects with static storage duration（定义在全局或名空间作用域下的对象，或者在类、函数、文件中声明为static的对象），因此by-value capture的lambda并不一定self-contained
 
-void addDivisorFilter()
-{
-	static auto divisor = …;
-	filters.emplace_back(
-		[=](int value) // captures nothing!，并没有对任何对象作出by-value capture
-		{ return value % divisor == 0; } // refers to above static
-	);
-	++divisor;
-}
+	void addDivisorFilter()
+	{
+		static auto divisor = …;
+		filters.emplace_back(
+			[=](int value) // captures nothing!，并没有对任何对象作出by-value capture
+			{ return value % divisor == 0; } // refers to above static
+		);
+		++divisor;
+	}
 
+
+
+
+### item 32: Use init capture to move objects into closures
+
+C++14能够将move-only对象move到closure中，C++11无法做到
+
+C++11中的新的捕获机制init capture能够做C++11的几乎所有捕获形式（除了默认捕获模式等），并且还能够可以实现capture-by-move，又称作generalized lambda capture
+
+Init capture可以指定：
+
+	1. Closure class中一个data member的名字
+	2. 一个用来初始化这个data member的表达式
+
+使用init capture将unique_ptr移动至closure中
+
+	auto pw = std::make_unique<Widget>(); 
+	auto func = [pw = std::move(pw)] // init capture，（少了个()参数列表？？？）
+		{ return pw->isValidated() && pw->isArchived(); }; 
+
+在init capture [pw = std::move(pw)]中，=左边是指定的closure的data member名称，作用域是closure class；=右边是初始化表达式，作用域和该lambda的定义位置一样
+
+局部变量pw并不是必须的，因为closure class的data member可以直接被make_unique初始化
+
+	auto func = [pw = std::make_unique<Widget>()]
+		{ return pw->isValidated() && pw->isArchived(); };
+		
+可以通过C++11实现上述含有move的lambda效果
+
+	class IsValAndArch {
+	public:
+		using DataType = std::unique_ptr<Widget>;
+		explicit IsValAndArch(DataType&& ptr) : pw(std::move(ptr)) {} // use of std::move
+		bool operator()() const
+			{ return pw->isValidated() && pw->isArchived(); }
+	private:
+		DataType pw;
+	};
+	auto func = IsValAndArch(std::make_unique<Widget>());
+
+或者使用C++11的lambda实现上述效果：
+
+	1. 将对象move到std::bind产生的function对象中（被函数对象“捕获”）
+	2. 使用by-reference capture捕获上述被“捕获”的对象
+
+例如
+
+	std::vector<double> data; 
+	auto func = [data = std::move(data)] // C++14 init capture
+			{ /* uses of data */ };
+	auto func = std::bind( // C++11 实现版本
+		[](const std::vector<double>& data) { /* uses of data */ },
+		std::move(data)
+	);
+
+Std::bind返回bing object，第一个参数为callable object
+
+一个bing object包含所有传入bind函数参数的拷贝，包括第一个lambda产生的closure参数的拷贝（这个closure的生存期和bind object一样），如果参数为lvalue使用copy ctor，rvalue使用move ctor
+
+上述bind版本跟C++14版本区别在于bind版本的lambda中的data是一个指向bing object中data的lvalue reference（std::move(data)是rvalue，但是bind object中的data是lvalue）
+
+默认closure class中operator()成员函数是const的，在C++14中lambda体内部所有data member都是const的，为了C++11版本bind object内的move-ctor的data不被修改，将参数声明为reference-to-const。若lambda声明为mutable，则无需使用const
+
+	auto func = std::bind(
+		[](std::vector<double>& data) mutable { /* uses of data */ },
+		std::move(data)
+	);
+
+注意的几点：
+
+	1. C++11中，不可能move-ctor一个对象到closure中，但是可以到bind object中
+	2. C++11中，模拟move-capture的方法是将对象move ctor到一个bind object中，并将这个对象by reference传给lambda
+	3. Closure和bind object生存期相同，可以将bind object中的对象视作closure中
+
+对make_unique被捕获，C++14为
+
+	auto func = [pw = std::make_unique<Widget>()] 
+			{ return pw->isValidated() && pw->isArchived(); };
+
+C++11的模拟为
+
+	auto func = std::bind(
+		[](const std::unique_ptr<Widget>& pw)
+			{ return pw->isValidated() && pw->isArchived(); },
+		std::make_unique<Widget>()
+	);
+
+Item34指出倾向于使用lambda代替bind，除了几个例外情况（例如C++11下bind模拟C++14特性）
+
+### item 33
+
+
+???
+
+### item 34: Prefer lambdas to std::bind
+
+Bind最早在2005的TR1中引入，C++11进入std
+
+倾向于使用lambda而不是bind
+
+lambda比bind更可读
+
+设置闹钟的lambda版本，从调用setSoundL内部的setAlarm函数开始记时
+
+	using Time = std::chrono::steady_clock::time_point;
+	enum class Sound { Beep, Siren, Whistle };
+	using Duration = std::chrono::steady_clock::duration;
+	void setAlarm(Time t, Sound s, Duration d);
+	
+	auto setSoundL = [](Sound s) {
+		using namespace std::chrono;
+		setAlarm(steady_clock::now() + hours(1), s, seconds(30));
+	};
+
+对应的bind版本
+
+	using namespace std::chrono; // as above
+	using namespace std::placeholders;
+	
+	auto setSoundB = std::bind(
+		setAlarm,
+		steady_clock::now() + 1h, // 错误，从调用bind函数开始记时
+		_1,
+		seconds(30)
+	);
+
+正确做法为（从调用setSoundB函数内部的setAlarm函数开始记时？？？）
+
+	auto setSoundB = std::bind(
+		setAlarm,
+		std::bind( std::plus<steady_clock::time_point>(), steady_clock::now(), hours(1) ), // 正确
+		_1,
+		seconds(30)
+	);
+
+当setAlarm函数重载时，lambda仍然正确
+
+	enum class Volume { Normal, Loud, LoudPlusPlus };
+	void setAlarm(Time t, Sound s, Duration d);
+	void setAlarm(Time t, Sound s, Duration d, Volume v);
+	
+	auto setSoundL = [](Sound s) {
+		using namespace std::chrono;
+		setAlarm(steady_clock::now() + 1h, s, 30s); // 调用三个参数版本
+	};
+	
+bind错误
+
+	auto setSoundB = std::bind(
+		setAlarm,  // 错误，无法确定调用哪一个重载函数
+		std::bind(std::plus<steady_clock::time_point>(), steady_clock::now(), 1h),
+		_1,
+		30s
+	);
+	
+需要显式指定函数指针类型
+
+	using SetAlarm3ParamType = void(*)(Time t, Sound s, Duration d);
+	auto setSoundB = std::bind(
+		static_cast<SetAlarm3ParamType>(setAlarm), 
+		std::bind(std::plus<steady_clock::time_point>(), steady_clock::now(), 1h),
+		_1,
+		30s
+	);
+
+上述函数指针访问方法使得编译器更难将其inline处理，即setSoundL(Sound::Siren); 相比setSoundB(Sound::Siren);  更容易被inline处理
+
+对于更加复杂的lambda
+
+	auto betweenL = [lowVal, highVal] (int val) { return lowVal <= val && val <= highVal; }; //  C++11 版本
+	auto betweenL = [lowVal, highVal] (const auto& val) { return lowVal <= val && val <= highVal; }; // C++14版本
+
+bind版本为
+
+	using namespace std::placeholders;
+	auto betweenB = std::bind( // C++14
+		std::logical_and<>(), 
+		std::bind(std::less_equal<>(), lowVal, _1),
+		std::bind(std::less_equal<>(), _1, highVal)
+	);
+	auto betweenB = std::bind( // C++11
+		std::logical_and<bool>(),
+		std::bind(std::less_equal<int>(), lowVal, _1),
+		std::bind(std::less_equal<int>(), _1, highVal)
+	);
+	
+Placeholder（例如_1，_2）加重理解困难
+
+lambda对于by-value或是by-reference显式标出
+
+	auto compressRateL = [w](CompLevel lev) { return compress(w, lev); }; // w以by-value形式存储
+
+bind总是拷贝他的参数（如果是rvalue？？？）
+
+bind将w参数以by-value形式存储在compressRateB中（w是可变的，以by-value还是by-reference存储会影响compressRateB的调用结果）
+
+	using namespace std::placeholders;
+	enum class CompLevel { Low, Normal, High }; 
+	Widget compress(const Widget& w, CompLevel lev);
+	Widget w;
+	auto compressRateB = std::bind(compress, w, _1); 
+
+如果想要以by-reference方式存储则使用
+
+	auto compressRateB = std::bind(compress, std::ref(w), _1);
+
+在C++14中，没有任何理由使用bind而不非lambda，但是在C++11中，仍然有两个例外需要使用bind：
+
+	1. Move capture（item32）
+	2. Polymorphic function objects.
+
+Polymorphic function objects，bindobject的函数调用操作使用perfect forwarding，它可以接收任何类型（一些限制见item30），可用于将对象绑定至模板化函数调用
+
+	class PolyWidget {
+	public:
+		template<typename T>
+		void operator()(const T& param);
+	};
+	PolyWidget pw;
+	auto boundPW = std::bind(pw, _1);
+	boundPW(1930); // 将int传给PolyWidget::operator()
+	boundPW(nullptr); // 将nullptr传给PolyWidget::operator()
+	boundPW("Rosebud"); // 将string传给PolyWidget::operator()
+
+C++14中对应做法为
+
+	auto boundPW = [pw](const auto& param) { pw(param); };
+	
