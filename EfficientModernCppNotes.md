@@ -1,4 +1,214 @@
+## Chapter 4: Smart Pointers
+
+### Item 18: use std::unique_ptr for exclusive-ownership resourse management
+
+默认情况下，Unique_ptr和raw ptr大小一样，大多数操作执行指令一样
+
+Move-only type
+
+使用std::forward转发new指令（item 25）
+
+可自定义deleter，传入raw ptr，增加大小（函数deleter增加至少一个函数指针大小；非闭包lambda不增加大小）
+
+可类型转换至std::shared_ptr
+
+两种类型，unique_ptr<T>和unique_ptr<T[]>
+
+### Item 19: Use std::shared_ptr for shared-ownership resource management
+
+引用计数的存储必须动态分配
+
+计数增减是原子操作
+
+move op不影响引用计数
+
+unique_ptr的deleter是其类型的一部分，shared_ptr不是
+
+shared_ptr的deleter与引用计数等一起作为control block动态分配
+
+
+	Std::shared_ptr<T>
+	===================           ==========
+	| Ptr to T                       |   ----> | T Object |
+	------------------------------            ==========
+	| Ptr to Control Block |   ---
+	===================    |
+	                                              ---> Control Block
+	                                                     ==============================
+	                                                     | Reference Count                              |
+	                                                     -------------------------------------------------
+	                                                     | Weak Count                                      |
+	                                                     -------------------------------------------------
+	                                                     | Other Data (e.g., custom deleter) |
+	                                                     ==============================
+
+
+如果从shared_ptr或者weak_ptr创建一个shared_ptr，复用control block；如果从raw ptr或者unique_ptr/auto_ptr或者std::make_shared创建一个shared_ptr，分配新的control block（资源本身并不能得知自己已经被一个shared_ptr指向了）
+
+一个资源的shared_ptr拥有多control block会导致资源被释放多次！！！
+
+如果需要给shared_ptr构造函数传入raw ptr，直接使用new而非引入一个raw ptr，避免直接传入raw ptr来构造shared_ptr
+
+自定义类A需要使用shared_ptr包装的this，需要继承Std::enable_shared_from_this类（一个CRTP类，含有share_from_this成员函数，返回一个shared_ptr包装的this指针）
+
+Share_from_this返回的shared指针会使用一个已有control block，因此需要在shared_from_this函数外存在一个已有shared_ptr指向this（通过enable_shared_from_this的ctor为私有，使用工厂函数create返回一个shared_ptr）
+
+一般control block内含有虚函数（确保正确销毁资源）、院子引用计数操作、动态分类cblock、自定义资源的allocator和deleter
+
+shared_ptr解引用开销等同于raw ptr，操作开销需要几个原子操作
+
+无法从shared_ptr生成unique_ptr
+
+没有shared_ptr<T[]>类型，不能将数组视作T类型放入shared_ptr，需要使用（std::array等）
+
+shared_ptr不支持operate[]；
+
+shared_ptr提供了derived-to-base指针转换（unique_ptr不支持），对数组使用会导致混乱
+
+### Item 20: Use std::weak_ptr for std::shared_ptr like pointers that can dangle.
+
+Weak_ptr正确处理悬空指针
+
+Weak_ptr不能销毁，不影响引用计数（不参与shared ownership），不能独立存在，是shared_ptr的一个augmentation，由shared_ptr创建而来
+
+Weak_ptr通过expired()函数检查是否悬空
+
+原子操作从weak_ptr测试是否dangle并创建Shared_ptr两种方式
+
+	1. Auto shared_ptr_w = weak_ptr_w.lock() // 如果悬空返回null
+	2. shared_ptr<W> shared_ptr_w(weak_ptr_w) // 如果悬空抛出std::bad_weak_ptr异常
+
+接受资源id返回unique_ptr的工厂函数可能会有很大开销，并为此在内部使用cache，需要维护这些cache将工厂函数修改为内部使用unordered_map<IDType, weak_ptr<W>> cache，并返回shared_ptr<W>
+
+Observer模式，subject管理状态，在状态变更时通知所有observer，因此subject需要维护一个weak_ptr<Observer>的容器以确保他们的可用
+
+A和C共享资源B，都通过shared_ptr指向B，B若要链接到A则需要用weak_ptr（B可以探测指向A的weak_ptr是否悬空），若用
+
+	1. Raw ptr，若A被销毁，C仍然指向B，那么B指向A的raw ptr悬空
+	2. Shared_ptr，A和B形成环，各自有一个引用计数为1的shared_ptr，均无法销毁
+
+若在一个树种，父节点拥有子节点的所有权，那么父节点通过unique_ptr指向子节点，子节点通过raw ptr指向父节点即可；如果所有权并不是如此严格，那么需要考虑weak_ptr
+
+Weak_ptr和shared_ptr占用同样大小空间，复用shared_ptr的control block
+
+
+### Item 21: Prefer std::make_unique and std::make_shared to direct use of new.
+
+Make_shared是c++11，make_unique是c++14，自定义make_unique为
+	
+	template<typename T, typename... Ts>
+	std::unique_ptr<T> make_unique(Ts&&... params)
+	{
+		return std::unique_ptr<T>(new T(std::forward<Ts>(params)...));
+	}
+	
+make_unique只是将参数完美转发给构造函数（不支持数组和自定义deleter），不要将其放入std命名空间中
+
+三个make函数（传入参数集合，完美转发给动态创建的对象，并返回智能指针）为make_unique，make_shared，allocate_shared（该函数接收allocator object用于动态内存分配）
+
+#### 多数情况下使用make函数而非智能指针创建函数
+
+	1. 少打一个类型名称
+	2. 类型安全
+	3. 效率（对make_shared和allocate_shared而言）
+
+少打一个类型名称的情况
+	
+	auto upw1(std::make_unique<Widget>()); // with make func
+	std::unique_ptr<Widget> upw2(new Widget); // without make func 
+	auto spw1(std::make_shared<Widget>()); // with make func
+	std::shared_ptr<Widget> spw2(new Widget); // without make func
+	
+类型安全的情况
+	
+	processWidget(std::shared_ptr<Widget>(new Widget), computePriority());
+	
+编译器按照 new Widget，computePriority()，std::shared_ptr<>()的顺序创建，则computePriority产生异常则会使new Widget内存泄露
+	
+效率（对make_shared和allocate_shared而言）
+	
+Shared_ptr<W> spw(new W)分配两次内存（W类型和control block）
+	
+make_shared<W>()允许编译器优化为分配一次内存（W类型和control block分配在一起）
+
+#### 某些情况下不使用make函数（对于make_unique和make_shared而言）
+
+	1. 不允许自定义deleter
+	2. 句法细节
+	
+句法细节
+
+（item7）通过大括号创建的对象倾向于使用std::initializer_list参数的ctor，小括号倾向于non-std::initializer_list的ctor。在make函数中使用完美转发处理这些参数，倾向于使用小括号的ctor；即需要braced initializer的地方需要使用new+braced initializer；（item30）braced initializer不能被完美转发，但是可以通过auto类型推导获得initializer_list对象，并传给make函数
+	
+	auto initList = { 10, 20 };
+	auto spv = std::make_shared<std::vector<int>>(initList);
+	
+#### 某些情况下对于make_shared而言还存在更多的问题
+
+	1. 对于重载了op new和op delete的类，不要使用make函数（这些往往被设计为处理sizeof(W)大小的内存，但是make函数会分配sizeof(W)+sizeof(control block)大小的内存）
+	2. 使用make_shared函数，当引用计数为0，调用对象的dtor，但是需要等到control block的内存被释放时才能释放整个占用的内存
+	3. Control block上含有ref count和weak count，weak_ptr通过检查ref count（而非weak count）判断是否expired，如果ref count为0则调用dtor，weak_ptr已经expired。只要weak_ptr联系了control block（weak count > 0），那么control block需要存在，即make函数分配的内存（包括已经销毁的对象和需要存在的control block）仍然不能被释放（直到所有shared_ptr和weak_ptr都销毁）。即当对象很大并且销毁最后一个shared_ptr和weak_ptr之间的时间很长，使用make_shared会出现内存问题；而直接使用new语句并构造shared_ptr不会出现这种问题
+
+在不能使用make函数时，最好做法是
+
+> new语句创建指针并在一个语句中立即将其传给smart point的构造函数，并且这个语句中不做任何别的事情。
+
+	processWidget(std::shared_ptr<Widget>(new Widget, customDeleter), computePriority());
+
+需要修改为
+
+	std::shared_ptr<Widget> spw(new Widget, customDeleter);
+	processWidget(spw, computePriority()); // lvalue
+
+一定条件下可以优化为
+
+	std::shared_ptr<Widget> spw(new Widget, customDeleter);
+	processWidget(std::move(spw), computePriority()); // rvalue
+	
+
+### Item 22: When using the Pimpl Idiom, define special member functions in the implementation file.
+
+Pimpl Idiom一种在对类进行修改后加速编译的方法
+	
+	#include <string>
+	#include <vector>
+	Class Widget {
+	private:
+		std::string name;
+		std::vector<double> data;
+	};
+
+修改为
+
+	#include "Impl"
+	Class Widget {
+	Public:
+		Widget() : pImpl(std::make_unique<Impl>()) {}
+	private:
+		Struct Impl;
+		Impl * pImpl;
+	};
+
+声明未定义的类型称为incomplete type
+
+????
+
+
+
+
+
 ## Chapter 5: Rvalue References, Move Semantics, and Perfect Forwarding
+
+move语义：使用廉价的move代替昂贵的copy，并且允许创造move-only类型（例如std::unique_ptr，std::future,std::thread）
+
+Perfect forwarding：可以写出接受抽象参数类型的函数模板，并将这些抽象类型参数forward给其他函数，使得这些函数接收的参数类型和我们传给forward函数的类型完全一致
+
+参数永远是lvalue，即使他的类型是rvalue reference
+
+	Void f(Widget&& w);
+	
+w是lvalue，即使他的类型是rvalue-reference-to-Widget
+
 
 ### Item 23: Understand std::move and std::forward
 
@@ -809,10 +1019,74 @@ C++11的模拟为
 
 Item34指出倾向于使用lambda代替bind，除了几个例外情况（例如C++11下bind模拟C++14特性）
 
-### item 33
 
 
-???
+### item 33: Use decltype on auto&& parameters to std::forward them.
+
+
+C++14中引入了generic lambdas（lambda中可以使用auto进行参数指定）
+
+	auto f = [](auto x){ return func(normalize(x)); };
+
+这个lambda对应的closure class类似如下
+
+	class SomeCompilerGeneratedClassName {
+	public:
+		template<typename T> 
+		auto operator()(T x) const // auto return type item3
+			{ return func(normalize(x)); }
+		… // other closure class
+	};
+
+这里即使lambda的传入参数为rvalue，lambda仍然将x作为lvalue传给normalize函数。需要将x修改为uniref，并将其通过forward传给normalize函数，即
+
+	auto f = [](auto&& x) { return func(normalize(std::forward<???>(x))); };
+	
+如果作为模板函数，使用std::forward<T>即可，在generic lambda中，需要使用decltype（传入lvalue时产生lvalue reference，传入rvalue时产生rvalue reference）
+
+> If the expression e refers to a variable in local or namespace scope, a static member variable or a function parameter, then the result is that variable's or parameter's declared type
+> e is lvalue -> decltype(e) is T&
+> e is xvalue -> decltype(e) is T&&; 
+> e is prvalue -> decltype(e) is T. 
+> (wiki: decltype)
+
+Item28中C++14的forward实现
+
+	template<typename T> 
+	T&& forward(remove_reference_t<T>& param) {
+		return static_cast<T&&>(param);
+	}
+
+如果T被设置为Widget（T=Widget），那么为
+
+	Widget&& forward(Widget& param) { // T = Widget
+		return static_cast<Widget&&>(param); 
+	}
+	
+如果T为Widget的右值引用
+
+	Widget&& && forward(Widget& param) { // T = Widget&&
+		return static_cast<Widget&& &&>(param); 
+	}
+
+即
+
+	Widget&& && forward(Widget& param) { // T = Widget&&
+		return static_cast<Widget&&>(param); 
+	}
+
+T=Widget和T=Widget&&完全一样，即使用rvalue reference或者non-reference类型实例化forward，结果一样
+
+如果lvalue传给lambda，decltype(x)将customary type传给forward，如果rvalue传给lambda，decltype(x)使用与否结果一样，因此decltype(x)总能得到想要的结果。
+
+因此正确的lambda为
+
+	auto f = [](auto&& param) { return func(normalize(std::forward<decltype(param)>(param))); };
+
+C++14的lambda可以是可变参数，即
+
+	auto f = [](auto&&... params) { return func(normalize(std::forward<decltype(params)>(params)...)); };
+	
 
 ### item 34: Prefer lambdas to std::bind
 
