@@ -1,3 +1,49 @@
+## Introduction
+
+
+
+### Terminology and Convections
+
+四个官方C++版本：C++98，C++03，C++11，C++14
+
+C++11最为普遍的特征是使用了move语义（以rvalue和lvalue为基础），rvalue表明对象可以执行move操作，lvalue不可以。
+
+区分lvalue和rvalue的一个启发性方法是看能否取得他的地址，可取得则往往为lvalue。这可以帮助我们记住一个表达式的类型独立于其是lvalue还是rvalue，即给出类型T，可以有lvalue的类型T和rvalue的类型T。
+
+对于rvalue reference类型的参数，他也是一个lvalue，可以取得rhs的地址，因此rhs为一个lvalue，rhs的类型为rvalue reference
+
+```C++
+class Widget {
+public:
+	Widget(Widget&& rhs); // rhs is an lvalue, though it has
+     ...                        // an rvalue reference type
+};
+```
+
+书中在描述一个一个对象来初始化同样类型的另一个对象时，称新对象是原有对象的copy，即使这个新对象是由copy或者move构造而成，c++中没有术语区分copy-constructed copy和move-constructed copy
+
+argument是函数调用中传给函数的表达式，用于初始化函数的parameter。parameter是lvalue，而arguments可能是lvalue或者rvalue
+
+perfect forwarding是将传给函数的arguments再次传给另一个函数，并且最初的arguments的rvalueness或者lvalueness性质得以保持
+
+设计良好的函数是exception safe的，即函数提供基本异常安全保证（the basic guarantee），即使抛出异常，程序不变量保持完好并且没有资源泄露。提供强异常安全保证（the strong guarantee）的函数，即使抛出异常，程序状态和调用函数前相同
+
+function object往往是指支持operator()调用的对象
+
+通过lambda创建的函数对象称为closure
+
+function template可以产生template function，class template可以产生template class
+
+声明引入名称和类型，定义明确了storage和具体实现
+
+函数签名包含了函数的参数类型和返回值（official定义往往忽略返回值），不包含函数名和参数名，也不包含函数声明中的其他部分（例如noexcept，constexpr）
+
+尽量避免deprecate特性，例如std::auto_ptr
+
+smart pointer往往重载了pointer dereferencing operator（operator*和operator->）,std::weak_ptr例外
+
+
+
 ## Chapter 4: Smart Pointers
 
 ### Item 18: use std::unique_ptr for exclusive-ownership resourse management
