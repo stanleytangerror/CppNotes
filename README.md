@@ -2,4 +2,4 @@
 
 个人C++学习记录
 
-[Effective Modern C++ 记录](./EfficientModernCppNotes.md)
+[Effective Modern C++ 抄书笔记](./EfficientModernCppNotes.md)
