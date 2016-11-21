@@ -539,6 +539,129 @@ param = class Widget const * const &
 ```
 
 
+
+## Chapter 2: auto
+
+### Item 5
+
+使用auto定义变量保证变量的初始化（使用initializer对变量进行类型推导）
+
+使用auto可以省略复杂的类型声明
+
+使用auto可以表示只有编译器知道的类型
+
+```C++
+// C++11
+auto derefUPLess = [](const std::unique_ptr<Widget>& p1, const std::unique_ptr<Widget>& p2)  { return *p1 < *p2; };
+
+// C++14
+auto derefLess =[](const auto& p1, const auto& p2) { return *p1 < *p2; }; 
+```
+
+如果使用C++11的std::function则表示为
+```C++
+std::function<bool(const std::unique_ptr<Widget>&, const std::unique_ptr<Widget>&)> derefUPLess = 
+	[](const std::unique_ptr<Widget>& p1, const std::unique_ptr<Widget>& p2) { return *p1 < *p2; };
+```
+
+并且使用auto声明的变量即是这个lambda的closure，而使用std::function声明的变量表示的closure是std::function模板实例化后的一个closure，对于任何signature他的大小是固定的，因此std::function的ctor为了存储这个closure允许进行堆内存分配。使得std::function声明的closure比auto对象closure消耗更多的空间；并且std::function相比auto声明的closure较难进行内联处理
+
+auto可以防止错误的变量初始化，不需要担心变量的具体类型，防止类型不匹配问题
+
+```C++
+std::vector<int> v;
+unsigned sz = v.size(); // 64位windows系统unsigned占32位，std::vector<int>::size_type占64位，产生错误
+
+auto sz = v.size(); // sz的类型为std::vector<int>::size_type
+```
+
+对于循环体
+
+```C++
+std::unordered_map<std::string, int> m;
+
+for (const std::pair<std::string, int>& p : m) 
+{
+}
+```
+
+上述写法中，unordered_map的成员应该为std::pair<const std::string, int>，因此每次迭代编译器会使用m中的一个成员（类型为std::pair<const std::string, int>）拷贝构造出一个（类型为const std::pair<std::string, int>）临时变量，并将p绑定到这个临时变量上
+
+使用auto不会有这个问题
+
+```C++
+for (const auto& p : m)
+{
+}
+```
+
+### Item 6: Use the explicitly typed initializer idiom when auto deduces undesired types
+
+Auto会获得不想要的类型
+
+```C++
+std::vector<bool> features(const Widget& w);
+```
+
+当vector<T>中类型不是bool时，operator[]返回对特定元素的引用T&，vector<bool>的operator[]函数返回std::vector<bool>::reference，使用auto带来问题（C++不允许对单个bit的引用，std::vector<bool>::reference是vector中bool类型元素的打包形式，每个元素一个bit，这个类型表现类似bool&）
+
+```C++
+bool highPriority = features(w)[5]; // highPriority类型为bool
+```
+
+返回std::vector<bool>::reference，并被隐式转换为bool
+
+```C++
+auto highPriority = features(w)[5]; // highPriority类型为std::vector<bool>::reference
+```
+
+调用完成后返回的类型为vector<bool>的临时变量被销毁，highPriority成为悬空引用
+
+这里std::vector<bool>::reference是一种proxy class，用于模仿或扩充另一个类的功能，分为visible proxy（std::shared_ptr和std::unique_ptr）和invisible proxy（这里的std::vector<bool>::reference）
+
+Expression template使用了这类模式来提高数值计算效率，例如矩阵加法
+
+```C++
+Matrix sum = m1 + m2 + m3 + m4;
+```
+
+并不一个一个的计算中间结果，而是返回一个Sum<Matrix, Matrix>的proxy class，最后在=赋值的时候使用Sum<Sum<Sum<Matrix, Matrix>, Matrix>, Matrix>来初始化sum矩阵（Eigen矩阵库中大量使用这种方式）
+
+通用法则是，invisible proxy class和auto不能很好的共存
+
+对于invisible proxy class，auto的主要问题是不能推断出需要的类型，但是问题并不在于auto，而是通过强制使用the explicitly typed initializer idiom来保证auto推导出正确类型
+
+```C++
+auto highPriority = static_cast<bool>(features(w)[5]);
+auto sum = static_cast<Matrix>(m1 + m2 + m3 + m4);
+```
+
+the explicitly typed initializer idiom也可以用来计算强调构造一个特定的类型的对象（从不同类型的对象）
+
+```C++
+double calcEpsilon();
+float ep = calcEpsilon(); // impliclitly convert double → float，但是这样并不能表明类型转换的故意性
+
+auto ep = static_cast<float>(calcEpsilon()); // 表明故意进行了类型转换
+```
+
+或者使用值域为[0.0, 1.0]的double类型来表示某一个像素在c.size()分辨率下的行c中的相对位置，获得对应像素下标index的方式为
+
+```C++
+int index = d * c.size();
+auto index = static_cast<int>(d * c.size()); // double转为int的故意性
+```
+
+注意，不要写成（不能体现类型转换的故意性）
+
+```C++
+auto ep = float(calcEpsilon());
+auto index = int(d * c.size());
+```
+
+
+
+
 ## Chapter 4: Smart Pointers
 
 ### Item 18: use std::unique_ptr for exclusive-ownership resourse management
