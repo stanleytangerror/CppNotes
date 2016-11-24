@@ -2077,3 +2077,170 @@ C++14中对应做法为
 ```C++
 auto boundPW = [pw](const auto& param) { pw(param); };
 ```
+
+
+
+## Chapter 7: The Concurrency API
+
+C++11提供了标准的多线程编程行为
+
+标准库有两个future模板，std::future，std::shared_future，下文统称为future
+
+### Item 35: Prefer task-based programming to threadbased
+
+异步的执行函数doAsyncWork，thread-based方式
+
+```C++
+int doAsyncWork();
+std::thread t(doAsyncWork);
+```
+
+Task-based方式
+
+```C++
+auto fut = std::async(doAsyncWork); // "fut" for "future"
+```
+
+想要获得doAsyncWork的返回值，thread-based方式没有直接获取结果的方法，task-based方式可以通过fut的get函数获得
+
+如果doAsyncWork抛出异常，thread-based方式内部调用std::termunate线程die，get函数可以访问到这个异常
+
+C++中task比thread更加高层，thread涉及到线程管理的细节
+
+并行C++中的线程
+
+> 硬件线程：真正进行计算的线程，现代硬件架构支持在每个CPU核心上提供多个硬件线程
+> 软件线程（OS线程或系统线程）：操作系统基于硬件线程对所有进程和调度的执行做的线程管理，通常多于硬件线程
+> Std::thread：为软件线程的handle，可以被创建、移动和detach
+
+
+即使doAsyncWork声明为noexcept，仍然会因为创建的线程超过系统的线程数限制而抛出std::system_error
+
+即使线程数没有超过上限，也会因为oversubscription而导致麻烦（unblocked线程多于硬件线程），频繁的上下文切换回带来巨大开销。(1) the CPU caches are typically cold for that software thread (i.e., they contain little data and few instructions useful to it) and (2) the running of the “new” software thread on that core “pollutes” the CPU caches for “old” threads that had been running on that core and are likely to be scheduled to run there again.
+
+通过使用async将线程管理问题交给标准库实现
+
+```C++
+auto fut = std::async(doAsyncWork);
+```
+
+async不保证创建一个新的软件线程，相反，他允许doAsyncWork在想要获取doAsyncWork结果的线程（fut的get或者wait线程）上允许
+
+对于负载均衡问题，现在由调度器来面对
+
+使用async并不能避免GUI线程的负载均衡问题，因为不知道哪一个线程对响应需求要求更高，因此要使用std::launch::async传入launch policy（item36），这能够保证想要执行的函数在不同的线程上执行
+
+最新技术的线程调度器使用了系统范围下的线程池来避免oversubscription问题，并使用work-stealing算法改进了硬件核心的负载均衡。C++的标准并没有对这些算法有要求，但是供应商们会应用这些算法，如果使用task-based方式，会自动利用上这些优势，thread-based方式需要自行处理各种问题
+
+Task-based方式能够更自然的访问函数的异步执行的结果（包括返回值和异常）
+
+一些需要直接使用thread的情形
+
+	1. 需要获取内部线程实现的API（例如pthread和windows thread的相关实现），这些实现往往功能更多。Std::thread对象提供native_handle成员函数用以获取内部实现的API，而std::async返回的std::future没有对应功能
+	2. 需要对特定应用进行线程使用的优化
+	3. 需要基于C++并行API实现线程技术
+	
+
+### Item 36: Specify std::launch::async if asynchronicity is essential
+
+通过std::async(f)进行异步执行有两种标准策略
+
+	1. Std::launch::async launch policy，f要在不同线程上异步执行
+	2. Std::launch::deferred launch policy，只有当调用了std::async返回的get或者wait函数是，运行f，即当get或者wait被调用时，同步执行f（阻塞调用方）直到f结束执行，如果没有调用get或者wait则永远不执行f
+
+默认launch policy为
+
+```C++
+auto fut1 = std::async(f); // run f using default launch policy
+auto fut2 = std::async(std::launch::async | 
+				std::launch::deferred, 
+				f); // run f either async or deferred
+```
+
+对于async的默认policy，线程t运行以下程序
+
+```C++
+auto fut = std::async(f); // run f using default launch policy
+```
+
+无法预测
+
+	1. f是否会和t并行运行
+	2. f是否会运行在不同于调用get或者wait函数的线程
+	3. f是否运行
+
+这个策略对thread_local变量来说很糟糕，如果f读写了thread-local storage（TLS），不能够预测究竟是哪一个线程的变量被access（上述例子中运行f的独立线程或是执行get或wait函数的线程）
+
+这个策略也会影响使用timeout的wait-based 循环，调用wait_for或者wait_until的任务会被deferred，即看上去一定会终止的循环会永远运行
+
+```C++
+using namespace std::literals; 
+
+void f() {
+	std::this_thread::sleep_for(1s);
+}
+
+auto fut = std::async(f); // run f asynchronously (conceptually)
+while (fut.wait_for(100ms) != std::future_status::ready) { // 可能永远无法结束循环
+	…
+}
+```
+
+如果调用async(f)使用的std::launch::async，则不会出现问题；如果使用std::launch::deferred，则wait_for永远返回std::future_status::deferred（永远不会为std::future_status::ready），循环永远不会终止
+
+没有直接方法向future判断一个任务是否deferred，只能通过一个超时函数例如wait_for的返回值来判断，而我们并不应该等待而是要获得wait_for的返回值，因此做法为
+
+```C++
+auto fut = std::async(f); 
+
+if (fut.wait_for(0s) == std::future_status::deferred) { // 如果任务被deferred
+	// ...use wait or get on fut to call f synchronously
+} 
+else { // task isn't deferred
+	while (fut.wait_for(100ms) != std::future_status::ready) { // f终会结束
+		… // task is neither deferred nor ready, so do concurrent work until it's ready
+	}
+	… // fut is ready
+}
+```
+
+因此默认策略正常工作的条件是
+
+	1. 任务不要求和调用get或者wait的线程并行执行
+	2. 无所谓哪一个线程的thread_local变量被读写
+	3. get或者wait一定会被调用，或者任务也可以从不被执行
+	4. 对wait_for或者wait_until的调用将人也可能会被延迟的情况考虑在内
+
+任何一个条件不满足，都需要给出策略
+
+```C++
+auto fut = std::async(std::launch::async, f); // 异步launch函数f
+```
+
+自动使用std::launch::async的自定义std::async的C++11版本，使用std::result_of模板获得返回类型
+
+```C++
+template<typename F, typename... Ts>
+inline
+std::future<typename std::result_of<F(Ts...)>::type>
+reallyAsync(F&& f, Ts&&... params) { // 返回future
+	return std::async(std::launch::async, 
+				std::forward<F>(f),
+				std::forward<Ts>(params)...);
+}
+
+auto fut = reallyAsync(f);
+```
+
+C++14版本为
+
+```C++
+template<typename F, typename... Ts>
+inline
+auto
+reallyAsync(F&& f, Ts&&... params) {
+	return std::async(std::launch::async,
+				std::forward<F>(f),
+				std::forward<Ts>(params)...);
+}
+```
