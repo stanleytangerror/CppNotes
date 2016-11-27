@@ -661,6 +661,915 @@ auto index = int(d * c.size());
 
 
 
+## Chapter 3: Moving to Modern C++
+
+### Item 7: Distinguish between () and {} when creating objects
+
+C++11初始化一个int类型
+
+```C++
+int x(0); 
+int y = 0; 
+int z{ 0 }; 
+```
+
+另外{}语法通常还可以写作（不特殊说明视作等同于直接使用{}版本）
+
+```C++
+int z = { 0 }; // 通常等同于braces-only版本
+```
+
+对于用户定义的类型，需要区分初始化还是赋值
+
+```C++
+Widget w1; // 调用默认构造函数
+Widget w2 = w1; // 初始化，调用拷贝构造函数
+w1 = w2; // 赋值，调用拷贝赋值
+```
+
+C++11引入uniform initialization（a single initialization syntax that can, at least in concept, be used anywhere and express everything），braced initialization is a syntactic construct.
+
+```C++
+std::vector<int> v{ 1, 3, 5 }; // v's initial content is 1, 3, 5
+```
+
+{}也可以用于对non-static data member进行初始化，也可以使用=初始化语法，但是不能使用()初始化语法
+
+```C++
+class Widget {
+private:
+	int x{ 0 }; // fine, x's default value is 0
+	int y = 0; // also fine
+	int z(0); // error!
+};
+```
+
+**C++不允许在类中使用()初始化**的原因在于会和函数声明冲突（根据[blue的专栏](https://zhuanlan.zhihu.com/p/21102748)）
+
+```C++
+class Widget {
+private:
+	typedef int x;
+int z(x); // 这是一个函数声明
+};
+```
+
+{}可以用于不能用于uncopyable对象的初始化（例如std::atomic），也可以使用()语法，但是不能使用=初始化语法
+
+```C++
+std::atomic<int> ai1{ 0 }; // fine
+std::atomic<int> ai2(0); // fine
+std::atomic<int> ai3 = 0; // 错误
+```
+
+对于C++的三种指定初始化表达式的方式，只有{}可以通用，因此称作uniform
+
+{}初始化禁止built-in类型的narrowing conversions，()初始化和=初始化允许（为了兼容历史代码）
+
+```C++
+double x, y, z;
+int sum1{ x + y + z }; // 错误
+int sum2(x + y + z); // 可行
+int sum3 = x + y + z; // 可行
+```
+
+另外{}初始化对C++的most vexing parse免疫，即C++要求任何能被parse为声明的东西均被解释为一个声明
+
+```C++
+Widget w1(10); // 调用Widget的构造函数，参数为10
+Widget w2(); // most vexing parse，声明一个名为w2返回值为Widget的函数
+Widget w3{}; // 调用Widget的构造函数，没有参数（函数不能使用{}声明）
+```
+
+没有引入initializer_list时，()和{}初始化相同
+
+```C++
+class Widget {
+public:
+	Widget(int i, bool b); 
+	Widget(int i, double d); 
+};
+
+Widget w1(10, true); // calls first ctor
+Widget w2{10, true}; // also calls first ctor
+Widget w3(10, 5.0); // calls second ctor
+Widget w4{10, 5.0}; // also calls second ctor
+```
+
+当声明了使用initializer_list为参数的构造函数之后，一旦有任何方式使得编译器能够调用initializer_list为参数的构造函数，编译器就会使用这个构造函数
+
+```C++
+class Widget {
+public:
+	Widget(int i, bool b); 
+	Widget(int i, double d); 
+	Widget(std::initializer_list<long double> il); // added
+};
+
+Widget w1(10, true); // calls first ctor
+Widget w2{10, true}; // 调用std::initializer_list ctor (10和true均转换为long double)
+Widget w3(10, 5.0); // calls second ctor
+Widget w4{10, 5.0}; // 调用std::initializer_list ctor // (10和5.0转换为long double)
+```
+
+initializer_list为参数的构造函数甚至会劫持copy ctor或者move ctor
+
+```C++
+class Widget {
+public:
+	Widget(int i, bool b); 
+	Widget(int i, double d); 
+	Widget(std::initializer_list<long double> il); 
+	operator float() const; // convert to float
+};
+
+Widget w5(w4); // 调用calls copy ctor
+Widget w6{w4}; // w4转换为float，再调用std::initializer_list ctor
+Widget w7(std::move(w4)); // 调用move ctor
+Widget w8{std::move(w4)}; // std::move(w4)转换为float，再调用std::initializer_list ctor
+```
+
+即使在最匹配的std::initializer_list constructor不能被调用时，仍然会匹配std::initializer_list constructor
+
+```C++
+class Widget {
+public:
+	Widget(int i, bool b); 
+	Widget(int i, double d); 
+	Widget(std::initializer_list<bool> il); // bool类型的initializer_list
+	// 没有隐式类型转换
+};
+
+Widget w{10, 5.0}; // 错误，requires narrowing conversions
+```
+
+首先由于存在10和5.0到bool类型的转换（是一种narrow conversion），因此调用initializer_list ctor；其次，{}初始化不能进行narrowing conversion（将10和5.0转换为bool），因此错误
+
+只有当{}中的类型无法被转换为initializer_list中的类型时，才会使用普通的重载决议
+
+```C++
+class Widget {
+public:
+	Widget(int i, bool b); 
+	Widget(int i, double d); 
+	Widget(std::initializer_list<std::string> il); // string类型的initializer_list
+}; 
+
+Widget w1(10, true); // 调用first ctor
+Widget w2{10, true}; // 调用calls first ctor
+Widget w3(10, 5.0); // 调用second ctor
+Widget w4{10, 5.0}; // 调用second ctor
+```
+
+
+对于空的{}初始化，如果意为提供空参数，应该调用默认构造函数，如果意为提供一个空的{}初始化，那么应该调用initializer_list ctor版本。事实上空的{}意为没有实参，而非一个空的initializer_list；如果需要使用空的{}作为实参调用initializer_list ctor版本，需要提供{{}}参数
+
+```C++
+class Widget {
+public:
+	Widget(); // default ctor
+	Widget(std::initializer_list<int> il); // std::initializer
+};
+
+Widget w1; // calls default ctor
+Widget w2{}; // calls default ctor
+Widget w3(); // most vexing parse! declares a function!
+Widget w4({}); // calls std::initializer_list ctor with empty list
+Widget w5{{}}; // ditto
+```
+
+对于std::vector需要注意
+
+```C++
+std::vector<int> v1(10, 20); // use non-std::initializer_list ctor，10个元素的vector，每个都是20
+std::vector<int> v2{10, 20}; // use std::initializer_list ctor，两个元素，10和20
+```
+
+作为类的设计者，需要使得使用{}或者()初始化效果一致，在对一个类添加initializer_list ctor时，注意原有的对普通ctor的调用会转而使用对initializer_list ctor的调用
+
+有时模板的作者也不知道具体应当使用()还是{}，只有调用者知道（例如std::make_unique和std::make_shared，这两个函数模板内部使用()，并在文档中详细说明）
+
+```C++
+template<typename T, typename... Ts>
+void doSomeWork(Ts&&... params) {
+	// create local T object from params… 可选择()或者{}
+	T localObject(std::forward<Ts>(params)...); // using parens
+	T localObject{std::forward<Ts>(params)...}; // using braces
+}
+
+doSomeWork<std::vector<int>>(10, 20); // doSomeWork模板的作者也不知道调用者的具体意图
+```
+
+### Item 8: Prefer nullptr to 0 and NULL
+
+0是一个int类型，NULL可以是一个整数类型（例如int或者long），这两个都不是指针类型，这会在重载函数决议时调用非指针类型的函数
+
+Nullptr的真实类型是std::nullptr_t，std::nullptr_t被隐式转换为所有裸指针类型，因此nullptr表现出任意类型的指针
+
+std::nullptr_t也定义为nullptr类型
+
+nullptr使程序可读
+
+```C++
+auto result = findRecord( /* arguments */ );
+if (result == 0) { … } // 不清楚result是否是指针类型
+if (result == nullptr) { … } // result是指针类型
+```
+
+使用0或者NULL在模板中进行类型推导时会产生错误
+
+
+### Item 9: Prefer alias declarations to typedefs
+
+对于typedef和alias declaration，声明一个函数（接受一个int和const std::string &，返回值void）
+
+```C++
+typedef void (*FP)(int, const std::string&); // typedef
+using FP = void (*)(int, const std::string&); // alias declaration
+```
+
+对于模板，使用alias declaration可以被模板化（alias templates），typedef不可以。例如对std::list<T, MyAlloc<T>>的模板，alias declaration版本为
+
+```C++
+template<typename T> 
+using MyAllocList = std::list<T, MyAlloc<T>>; 
+
+MyAllocList<Widget> lw;
+```
+
+typedef版本为
+
+```C++
+template<typename T> 
+struct MyAllocList {
+	typedef std::list<T, MyAlloc<T>> type; 
+};
+MyAllocList<Widget>::type lw;
+```
+
+依赖于模板类型参数（T）的类型（MyAllocList<T>::type而非MyAllocList<T>）是dependent type，C++要求dependent type需要前置typename
+
+```C++
+template<typename T> 
+struct MyAllocList {
+	typedef std::list<T, MyAlloc<T>> type; 
+};
+
+template<typename T>
+class Widget { 
+private: 
+	typename MyAllocList<T>::type list; // as a data member
+};
+```
+
+使用alias template变得简单
+
+```C++
+template<typename T>
+using MyAllocList = std::list<T, MyAlloc<T>>; 
+
+template<typename T>
+class Widget {
+private:
+	MyAllocList<T> list; // no "typename", no "::type"
+};
+```
+
+上述例子中，编译器在处理使用alias template定义的MyAllocList<T>时已经知道这是一个类型（因为这是一个alias template，一个alias template只能表示一个类型），因此是一个non-dependent type；但是使用嵌套的typedef定义的MyAllocList<T>::type时，不能知道这表示一个类型（因为只有MyAllocList被实例化了才能看到MyAllocList内部的MyAllocList<T>::type是一个名字或者一个成员变量），因此是一个dependent type
+
+例如
+
+```C++
+class Wine { … };
+
+template<>
+class MyAllocList<Wine> { 
+private:
+	enum class WineType { White, Red, Rose }; 
+	WineType type; // in this class, type is a data member!
+};
+```
+
+C++11的头文件<type_traits>中定义了许多traits，例如
+
+```C++
+std::remove_const<T>::type // yields T from const T
+std::remove_reference<T>::type // yields T from T& and T&&
+std::add_lvalue_reference<T>::type // yields T& from T
+```
+
+出于历史原因，这些都是用结构体模板中嵌套的typedef而非alias template实现的（注意那些::type），使用时都要在前面添上typename
+
+C++14使用alias template提供了上述这些功能
+
+```C++
+std::remove_const<T>::type // C++11: const T → T
+std::remove_const_t<T> // C++14 equivalent
+
+std::remove_reference<T>::type // C++11: T&/T&& → T
+std::remove_reference_t<T> // C++14 equivalent
+
+std::add_lvalue_reference<T>::type // C++11: T → T&
+std::add_lvalue_reference_t<T> // C++14 equivalent
+```
+
+在C++11中自行定义这些alias template也很简单
+
+```C++
+template <class T>
+using remove_const_t = typename remove_const<T>::type;
+
+template <class T>
+using remove_reference_t = typename remove_reference<T>::type;
+
+template <class T>
+using add_lvalue_reference_t = typename add_lvalue_reference<T>::type;
+```
+
+### Item 10: Prefer scoped enums to unscoped enums
+
+通常大括号内声明的name仅在大括号内可见，但是C++98风格的enum属于包含这个enum的作用域，会造成名称泄露，称为unscoped enum
+
+```C++
+enum Color { black, white, red }; 
+auto white = false; // 错误，white已声明
+```
+
+C++11的scoped enum不会造成这种问题
+
+```C++
+enum class Color { black, white, red };
+auto white = false;
+Color c = white; // 错误，white未声明
+Color c = Color::white; // 可行
+auto c = Color::white; // 可行
+```
+
+unscoped enum会被隐式转化为整数类型（并可能接着转为浮点类型），scoped enum不会发生隐式类型转换
+
+```C++
+enum Color { black, white, red }; 
+Color c = red;
+if (c < 14.5) { … } // 可行，Color和double进行比较
+```
+
+如果scoped enum进行这类类型转化，可以使用static_cast
+
+```C++
+enum class Color { black, white, red }; 
+Color c = Color::red; 
+if (c < 14.5) { … } // 错误
+if (static_cast<double>(c) < 14.5) { // odd code, but it's valid
+	auto factors = primeFactors(static_cast<std::size_t>(c)); // suspect, but it compiles
+}
+```
+
+Scoped enum可以前向声明
+
+```C++
+enum class Color; // 可行
+```
+
+但是在C++11对unscoped enum做前向声明必须做额外工作（C++98仅允许unscoped enum的定义，不允许前向声明）
+
+对于每个unscoped enum，编译器需要使用其的underlying type，不同的unscoped enum的underlying type大小不同，（编译器通常选择最小的能够覆盖所有enum的类型，但有时为了优化速度而非大小选择其他更大的类型）
+
+C++98不支持前向声明确保了先对unscoped enum选择underlying type，再使用这个类型。但是unscoped enum类型的往往被include在一个头文件中，使得类型的一个修改会导致大量的重新编译（修改会使得underlying type发生变动？？）
+
+对于C++11中的scoped enum的默认underlying type为int，也可以自行声明大小
+
+```C++
+enum class Status: std::uint32_t { 
+	good = 0,
+	failed = 1,
+	incomplete = 100,
+	corrupt = 200,
+	audited = 500,
+	indeterminate = 0xFFFFFFFF
+};
+```
+
+C++11中unscoped enum的前向声明要指定underlying type
+
+```C++
+enum Color: std::uint8_t;
+```
+
+仍然有一个unscoped enum有用处的例子，（可以使用scoped enum解决），即当访问std::tuple时
+
+```C++
+using UserInfo = std::tuple<std::string, std::string, std::size_t> ; // 一个用户的name，email，reputation
+enum UserInfoFields { uiName, uiEmail, uiReputation };
+UserInfo uInfo; 
+auto val = std::get<uiEmail>(uInfo); // 通过unscoped enum访问UserInfo这个tuple（std::get模板参数要求编译期确定）
+```
+
+如果使用scoped enum，可以使用
+
+```C++
+enum class UserInfoFields { uiName, uiEmail, uiReputation };
+UserInfo uInfo; 
+auto val = std::get<static_cast<std::size_t>(UserInfoFields::uiEmail)>(uInfo);
+```
+
+或者写一个编译期函数toUType，利用std::underlying_type这个type trait
+
+```C++
+// C++11
+template<typename E>
+constexpr 
+typename std::underlying_type<E>::type // 代替std::size_t
+toUType(E enumerator) noexcept {
+	return static_cast<typename std::underlying_type<E>::type>(enumerator);
+}
+
+// C++14
+template<typename E> // C++14
+constexpr 
+std::underlying_type_t<E> // 对应C++11中的typename std::underlying_type<E>::type
+toUType(E enumerator) noexcept {
+	return static_cast<std::underlying_type_t<E>>(enumerator);
+}
+
+// C++14
+template<typename E> // C++14
+constexpr 
+auto // 使用auto返回类型
+toUType(E enumerator) noexcept {
+return static_cast<std::underlying_type_t<E>>(enumerator);
+}
+```
+
+调用方式为
+
+```C++
+auto val = std::get<toUType(UserInfoFields::uiEmail)>(uInfo);
+```
+
+### Item 11: Prefer deleted functions to private undefined ones
+
+所有istream和ostream的基类basic_ios不允许进行copy operation
+
+C++98中定义为
+
+```C++
+template <class charT, class traits = char_traits<charT> >
+class basic_ios : public ios_base {
+public:
+	…
+private:
+	basic_ios(const basic_ios& ); // not defined
+	basic_ios& operator=(const basic_ios&); // not defined
+};
+```
+
+C++11中定义为
+
+```C++
+template <class charT, class traits = char_traits<charT> >
+class basic_ios : public ios_base {
+public:
+	…
+	basic_ios(const basic_ios& ) = delete;
+	basic_ios& operator=(const basic_ios&) = delete;
+};
+```
+
+如果使用了这些函数，C++98的做法会在link-time报错，C++11会在编译期报错；C++11中将deleted function声明为public，如果为private报错信息中可能只包含访问private而不包含delete
+
+deleted function可以用于任意函数，而只有成员函数才能为private。例如一个判断是否幸运数字的程序
+
+```C++
+bool isLucky(int number); // original function
+bool isLucky(char) = delete; // reject chars
+bool isLucky(bool) = delete; // reject bools
+bool isLucky(double) = delete; // reject doubles and floats
+```
+
+Deleted function会参与重载决议，即上述例子中float参数会调用重载函数isLucky(double)而非isLucky(int)
+
+Deleted function还可以用于防止模板实例化
+
+```C++
+template<typename T>
+void processPointer(T* ptr);
+
+template<>
+void processPointer<void>(void*) = delete; // 防止对void*参数的实例化
+
+template<>
+void processPointer<const void>(const void*) = delete; 
+
+template<>
+void processPointer<const void>(const volatile void*) = delete;
+```
+
+成员函数模板不能被指定不同的access level（模板实例化需要写在名空间作用域中，而非类作用域中），因此不能通过对模板实例化声明private来防止特定的实例化
+
+```C++
+class Widget {
+public:
+	template<typename T>
+	void processPointer(T* ptr) { … }
+private:
+	template<> // error!
+	void processPointer<void>(void*);
+};
+```
+
+正确做法是
+
+```C++
+class Widget {
+public:
+	template<typename T>
+	void processPointer(T* ptr) { … }
+};
+template<>
+void Widget::processPointer<void>(void*) = delete;
+```
+
+### Item 12: Declare overriding functions override
+
+
+C++98中override发生条件：
+
+	1. 基类函数为虚函数
+	2. 基函数和派生函数（除了dtor）的名称完全相同
+	3. 基函数和派生函数的形参类型完全相同
+	4. 基函数和派生函数的constness完全相同
+	5. 基函数和派生函数的返回值类型和exception specification必须兼容
+
+C++11中添加了一个：函数的reference qualifier必须相同
+
+函数的reference qualifier用于根据*this是lvalue还是rvalue约束函数的调用条件
+
+```C++
+class Widget {
+public:
+	void doWork() &; // 仅当*this为lvalue时可用
+	void doWork() &&; // 仅当*this为rvalue时可用
+};
+
+Widget makeWidget(); // factory function (returns rvalue)
+Widget w; // normal object (an lvalue)
+
+w.doWork(); // calls Widget::doWork for lvalues (i.e., Widget::doWork &)
+makeWidget().doWork(); // calls Widget::doWork for rvalues (i.e., Widget::doWork &&)
+```
+
+如果显式写出override，会避免因写错导致的本因override的函数没有被override
+
+C++11引入两个contextual keywords，override和final，这两个keyword只在特定场景中产生作用。只有override出现在成员函数声明的最后才有含义，历史代码中已经使用的override并不需要为了适应C++11而更改；只有final使用在虚函数和类型上才有特定作用，使用在虚函数上防止该虚函数被派生类的函数override，使用在类上防止这个类被作为他与类型的基类
+
+```C++
+class Warning { // potential legacy class from C++98
+public:
+	void override(); // legal in both C++98 and C++11
+};
+```
+
+#### 补充Reference qualifier的使用场景
+
+给出一个Widget类，内含成员变量std::vector<double> values，需要使用data()成员函数获取内部values
+
+```C++
+class Widget {
+public:
+	using DataType = std::vector<double>;
+	DataType& data() { return values; }
+private:
+	DataType values;
+};
+```
+
+调用情形为
+
+```C++
+Widget w; // lvalue
+auto vals1 = w.data(); // 将w.values拷贝至vals1
+
+Widget makeWidget(); // 工厂类，返回rvalue
+auto vals2 = makeWidget().data(); // 将values拷贝值vals2
+```
+
+上述最后一行，调用rvalue的data()成员函数，由于data()成员函数返回一个lvalue reference，C++要求编译器产生拷贝操作。而对于rvalue，获取其values成员变量只需要move即可，因此根据*this是lvalue还是rvalue区分对待
+
+```C++
+class Widget {
+public:
+	using DataType = std::vector<double>;
+	DataType& data() & // for lvalue Widgets,
+		{ return values; } // return lvalue
+	DataType data() && // for rvalue Widgets,
+		{ return std::move(values); } // return rvalue
+private:
+	DataType values;
+};
+```
+
+这样调用情形为
+
+```C++
+auto vals1 = w.data(); // 调用lvalue重载版本，拷贝构造vals1
+auto vals2 = makeWidget().data(); // 调用rvalue重载版本，移动构造vals2
+```
+
+### Item 13: Prefer const_iterators to iterators
+
+C++11下使用const_iterator很简单
+
+```C++
+std::vector<int> values; 
+auto it = std::find(values.cbegin(),values.cend(), 1983);
+values.insert(it, 1998);
+```
+
+如果要实现最大程度的泛型，需要考虑到一些库或是类似容器的数据结构提供non-member function的begin/end等函数（C++11为数组提供了non-member begin，返回指向数组的首个元素的指针）。C++11只包含non-member function的begin和end；C++14包含non-member function的cbegin, cend, rbegin, rend, crbegin, crend，使用这些函数实现泛型的findAndInsert
+
+```C++
+// C++14
+template<typename C, typename V>
+void findAndInsert(C& container, const V& targetVal, const V& insertVal) { 
+	using std::cbegin; 
+	using std::cend;
+	auto it = std::find(cbegin(container), // non-member cbegin
+				cend(container), // non-member cend
+				targetVal);
+	container.insert(it, insertVal);
+}
+```
+
+在C++11中模拟non-member cbegin，如果容器是const的，那么元素也是const的，使用begin就可以获得const_iterator
+
+```C++
+template <class C>
+auto cbegin(const C& container)->decltype(std::begin(container)) {
+	return std::begin(container); 
+}
+```
+
+### Item 14: Declare functions noexcept if they won’t emit exceptions.
+
+C++98中，需要制定函数可能抛出异常的类型，对函数的修改可能会使得抛出异常的类型不同，导致调用方的失败
+
+C++11中要求函数声明可能会或者不会抛出异常，无条件的noexcept表面函数保证不抛出异常
+
+函数的noexcept是函数接口的一部分
+
+给函数添加noexcept可以允许编译器生成更好的目标代码
+
+```C++
+int f(int x) throw(); // no exceptions from f: C++98 style
+int f(int x) noexcept; // no exceptions from f: C++11 style
+```
+
+对于上述函数f，如果运行期间抛出异常，则违反函数的异常指定。在C++98的异常指定下，对于f的调用者，函数调用栈unwound；在C++11下，只是可能unwound
+
+在noexcept函数中，如果一个异常propagate到函数外，在unwindable状态下优化器不需要维护运行期的调用栈，也不需要在异常离开函数时，保证这个noexcept函数中的对象按照构造的逆序销毁。C++98的throw()函数缺乏这一优化弹性，总结为
+
+```C++
+RetType function(params) noexcept; // most optimizable
+RetType function(params) throw(); // less optimizable
+RetType function(params); // less optimizable
+```
+
+对于某些函数（例如move和swap），是否声明noexcept差别巨大
+
+std::vector<Widget>，通过push_back添加元素。C++98下分配空间，并将旧元素拷贝至新的位置，并销毁旧的内存，push_back可以提供强异常安全保证，即拷贝元素期间抛出任何异常，旧的内存空间没有被破坏；C++11下如果将拷贝改为移动，就不能提供强异常安全保证了（移动期间抛出异常时旧内存空间已经被修改）
+
+已有代码可能会依赖于C++98中push_back的强异常安全保证，因此C++11不能直接将内部操作由拷贝替换成移动，而是使用“move if you can, but copy if you must”策略，这一策略也同时应用于许多标准库中（std::vector::reverse和std::deque::insert），当移动操作声明为noexcept时，使用移动替换拷贝操作
+
+swap通常使用copy assignment实现，标准库中的swap的noexcept性质通常依赖于用户定义的swap的noexcept性质
+
+```C++
+template <class T, size_t N>
+void swap(T (&a)[N], T (&b)[N]) noexcept(noexcept(swap(*a, *b)));
+
+template <class T1, class T2>
+struct pair {
+    void swap(pair& p) noexcept(noexcept(swap(first, p.first)) &&
+                                 noexcept(swap(second, p.second)));
+    ...
+};
+```
+
+大部分函数是exception-neutral的，他们本身并不抛出异常，但是会调用一些可能抛出异常的函数
+
+程序的正确性比优化更重要，不能为了noexcept带来的优化而影响功能的实现，例如不能为了声明noexcept而在函数内部处理本该抛出到函数外的异常
+
+对于某些函数，noexcept非常重要，默认即是隐式声明了noexcept的。在C++98中允许内存释放函数（operator delete和operator delete[]）和析构函数抛出异常时很不好的行为；在C++11中这一点直接升级为语言规则，即无论是编译器产生或是自定义的所有内存释放函数和所有析构函数都隐式声明了noexcept，除非类的一个成员（包括继承成员以及包含在其他成员中的成员）可能抛出异常（声明为“noexcept(false)”）。标准库中没有可能抛出异常的内存释放函数和析构函数，并且标准库使用的析构函数（在容器内或者被传给algorithm）抛出异常为未定义行为
+
+函数可以分为wide contracts和narrow contracts。wide constract函数没有preconditions，这类函数不会产生未定义行为；narrow contract函数有preconditions，如果这些precondition不能满足则会产生未定义行为
+
+假设函数f接受std::string，并有一个precondition为string的长度不超过32，那么当string的长度超过32则产生未定义行为，函数f没有检查这个precondition的义务，可以声明为
+
+```C++
+void f(const std::string& s) noexcept; // precondition: s.length() <= 32
+```
+
+但是f的实现也可以检查这个precondition并在不满足时抛出异常“precondition was violated”，这在进行测试的时会易于debug，因此对于函数声明的noexcept，通常只对wide contract函数保留这个noexcept
+
+
+编译器并不会识别函数实现和函数exception specification的统一性
+
+```C++
+void doWork() noexcept {
+  setup();
+  cleanup();
+}
+```
+
+如果setup和cleanup没有声明noexcept，但是文档中表示他们不会抛出异常，doWork也可以声明noexcept。因为setup和cleanup有可能通过C实现（从C标准库中加入std名空间中的函数也缺少exception specification，例如std::strlen没有被声明为noexcept），或者是没有为C++11重写的来自于C++98的没有使用exception specification的库函数
+
+因此noexcept函数依赖于没有声明noexcept函数的行为是合法的，编译器也不会产生警告
+
+### Item 15: Use constexpr whenever possible
+
+constexpr表示一个变量在编译期可知。
+Lest I
+ruin the surprise ending, for now I’ll just say that you can’t assume that the results of
+constexpr functions are const, nor can you take for granted that their values are
+known during compilation. Perhaps most intriguingly, these things are features. It’s
+good that constexpr functions need not produce results that are const or known
+during compilation!
+
+constexpr对象是const的，并且他的值在编译期可知（其实值是在translation阶段确定，translation阶段包括编译和链接两个步骤）
+
+编译期可知的值可以被放入只读内存
+
+const类型的编译期可知的整形变量可以使用在integral contant expression场景中，包括数组大小指定，整形模板参数（std::array的长度），枚举值，alignment specifier等等
+
+所有constexpr对象都是const的，反之不成立
+
+
+使用compile-time constants参数调用constexpr函数时，产生compile-time constants
+
+	1. constexpr函数可以用在需要compile-time constants的场景中，如果实参是compile-time constants，则结果是compile-time constants
+	2. 如果constexpr函数的参数为非编译期可知的值，则其表现成一个普通函数
+
+对于3的n次方的实现，std::pow进应用于浮点类型，并且不是constexpr。自定义constexpr的pow
+
+```C++
+constexpr int pow(int base, int exp) noexcept;
+```
+
+自定义pow的返回值不是const的，因此当参数编译期可知时，返回值是compile-time constant；如果参数编译期不可知，则变为普通函数
+
+C++11中constexpr函数不能包含多于一个可执行语句，自定义pow为
+
+```C++
+constexpr int pow(int base, int exp) noexcept {
+	return (exp == 0 ? 1 : base * pow(base, exp - 1));
+}
+```
+
+C++14版本为
+
+```C++
+constexpr int pow(int base, int exp) noexcept {
+	auto result = 1;
+	for (int i = 0; i < exp; ++i) result *= base;
+	return result;
+}
+```
+
+constexpr函数被限制为只能接受和返回literal type
+
+C++11中除了void所有内建类型都是literal类型，并且自定义类型也可以是literal type（如果类的ctor和其他成员函数都是constexpr函数，则这个类也是literal type）
+
+C++11的Point版本
+
+```C++
+class Point {
+public:
+	constexpr Point(double xVal = 0, double yVal = 0) noexcept
+		: x(xVal), y(yVal) {}
+	
+	constexpr double xValue() const noexcept { return x; }
+	constexpr double yValue() const noexcept { return y; }
+	
+	void setX(double newX) noexcept { x = newX; } // 不是constexpr
+	void setY(double newY) noexcept { y = newY; } // 不是constexpr
+
+private:
+	double x, y;
+};
+
+constexpr Point p1(9.4, 27.7); // fine
+constexpr Point p2(28.8, 5.3); // also fine
+
+constexpr
+Point midpoint(const Point& p1, const Point& p2) noexcept {
+	return { (p1.xValue() + p2.xValue()) / 2, (p1.yValue() + p2.yValue()) / 2 }; 
+}
+constexpr auto mid = midpoint(p1, p2);
+```
+
+上面C++11的Point例子中setter函数不是constexpr，因为C++11中void不是literal type，并且C++11中constexpr成员函数隐式const
+
+C++14中没有这些限制，Point版本为
+
+```C++
+class Point {
+public:
+	…
+	constexpr void setX(double newX) noexcept { x = newX; } // C++14
+	constexpr void setY(double newY) noexcept { y = newY; } // C++14
+	…
+};
+
+constexpr Point reflection(const Point& p) noexcept { // C++14
+	Point result; // create non-const Point
+	result.setX(-p.xValue()); // set its x and y values
+	result.setY(-p.yValue());
+	return result; // return copy of it
+}
+
+constexpr Point p1(9.4, 27.7); 
+constexpr Point p2(28.8, 5.3);
+constexpr auto mid = midpoint(p1, p2);
+constexpr auto reflectedMid = reflection(mid);
+```
+
+constexpr应该是一个对象或者函数的接口的一部分，constexpr表明可以被用在需要一个constant expression的场景中，如果将原来应用constexpr的程序中的constexpr删去，很多程序将会不能编译（I/O通常不被允许出现在constexpr函数中，因此为了调试等原因将I/O加入函数往往会出现问题）
+
+### Item 16: make const member functions thread safe
+
+Const 成员函数可以对mutable成员变量作修改，需要保护mutable变量的线程安全
+
+```C++
+class Polynomial {
+public:
+	using RootsType = std::vector<double>;
+	RootsType roots() const { // 需要保证rootsAreValid和rootVals两个mutable变量的线程安全
+		if (!rootsAreValid) { // if cache not valid
+			… 
+			rootsAreValid = true;
+		}
+		return rootVals;
+	}
+private:
+	mutable bool rootsAreValid{ false }; 
+	mutable RootsType rootVals{};
+};
+```
+
+使用std::lock_guard和std::mutex，std::mutex只可以被move不能被copy，会导致Polynomial只能被move不能被copy
+
+```C++
+class Polynomial {
+public:
+	using RootsType = std::vector<double>;
+	RootsType roots() const {
+		std::lock_guard<std::mutex> g(m); // lock mutex
+		if (!rootsAreValid) { // if cache not valid
+			… 
+			rootsAreValid = true;
+		}
+		return rootVals;
+	} // unlock mutex
+private:
+	mutable std::mutex m;
+	mutable bool rootsAreValid{ false };
+	mutable RootsType rootVals{};
+};
+```
+
+
+对于一个需要synchronization的变量或内存地址，std::atomic够用；对于需要整体看做一个单元的多个变量或者内存地址，需要使用mutex
+
+### item 17: understand special member function generation
+
+类的自动生成函数
+
+C++98中包含：默认构造函数，默认析构函数，拷贝构造函数，拷贝赋值函数
+C++11中包含：移动构造函数，移动赋值函数
+
+move con执行member wise move（不强制要求，为了兼容 not move-enable c++98）
+
+copy con 和 copy assign 独立生成（没有显式声明）
+move con 和 move assign 同时生成（没有任何一个显式move con或move assign声明）
+
+显式声明copy operation会阻止move operation生成；显式声明move operation会阻止copy operation生成；这两点都意味着普通member wise op并不能满足要求
+
+> rule of three：声明copy con/copy assign/destructor中的任何一个，就需要声明全部三个（参与资源管理）
+
+显式声明destructor不对copy op产生影响（98 11），应该加以注意
+
+move op自动生成条件：
+
+	1. no copy op
+	2. no move op
+	3. no destructor
+
+成员模板函数不会影响这些特殊成员函数的生成
+
+
+
+
+
+
 
 ## Chapter 4: Smart Pointers
 
