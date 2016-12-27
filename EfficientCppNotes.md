@@ -92,6 +92,8 @@ template实参推导只施行于function templates上，class templates并不依
 
 friend能够在类内部声明一个non-member函数
 
+Class template内，template名称可作为template和其参数的简略表达方式
+
 类似Item 24，需要类型转换时要为模板定义非成员函数，但是非成员函数模板在推导时不考虑任何隐式类型转换，需要借助class template的实例化提供一个实例化的非成员函数（而非模板），因此借助friend实现声明在class template内部（随着class template实例化而实例化为非成员函数）的non-member 函数
 
 
