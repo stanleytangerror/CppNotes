@@ -1,6 +1,251 @@
 # Effective C++ 摘要
 
 
+
+## Chapter 1 Accustoming yourself to C++
+
+
+### Item 1: View C++ as a federation of languages
+
+C++是个多重范型编程语言（multiparadigm programming language），支持过程形式（procedural），面向对象形式（object-oriented），函数形式（functional），泛型形式（generic），元编程形式（metaprogramming）
+
+C++中的主要次语言（sublanguage）有四个：C；object-oriented C++；template C++；STL
+
+
+### Item 2: Prefer consts, enums, and inlines to #defines
+
+#define被预处理器处理，不进入符号表
+
+尽量使用std::string而非char*-based
+
+以常量替换宏
+
+class专属的static的整数类型常量，如果不取他们的地址且不需要看到他们的定义式，可以声明并使用而无需提供定义式
+
+在声明时获得初值的class常量，不能在定义时再设置初值
+
+#define不重视作用域，因此不能用来定义class专属常量
+
+In-class初值设定只能对整数常量进行，如果不支持整数常量的in-class初值设定，则可以使用“the enum hack”
+
+```C++
+class GamePlayer {
+private:
+	enum { NumTurns = 5 };
+	int scores[NumTurns];
+};
+```
+
+Enum hack中，不能对该enum取地址，类似#define
+
+使用template inline函数替代形似函数的宏
+
+
+### Item 3: Use const whenever possible
+
+const可以用于：class外部修饰global或namespace作用域中的常量，文件、函数、区块作用域中被声明为static的对象，class内部的static和non-static成员变量，指针自身或指针所指物等
+
+迭代器表现类似于指针
+
+```C++
+const std::vector<int>::iterator iter; // 类似于T* const
+std::vector<int>::const_iterator cIter; // 类似于const T*或T const *
+```
+
+Const成员函数确认该成员可以作用于const对象身上
+
+只有常量性不同的两个成员函数可以被重载
+
+const成员函数的意义有两种：
+
+	1. Bitwise constness（physical constness），const成员函数不改变对象内任何non-static成员变量，即不更改对象的任何bit；好处是容易侦测违反点；C++对常量性的定义即为bitwise constness；但是对于持有指针的对象来说，bitwise constness并不能保证指针指向的内容的constness
+
+```C++
+class CTextBlock {
+public:
+	char & operator[](std::size_t position) const {
+		return pText[position];
+	}
+private:
+	char * pText;
+};
+```
+	2. Logical constness，const成员函数可以修改对象内部某些bit，只要客户端侦测不出即可；可以使用mutable（effective modern C++ item 16）
+	
+对于const和non-const成员函数中的重复，使用non-const成员函数调用其const版本，其中需要借助static_const和const_cast
+
+```C++
+class TextBlock {
+public:
+	const char & operator[] (std::size_t position) const;
+	
+	char & operator[] (std::size_t position) {
+		return const_cast<char&>(static_cast<const TextBlock&>(*this)[position]);
+	}
+};
+```
+
+
+### Item 4: Make sure that objects are initialized before they're used
+
+区分初始化和赋值
+
+总是在member initialization list中初始化类的成员变量，（有一个规则是：列出所有成员变量）；成员变量为const或者reference的，只能初始化，不能被赋值
+
+成员初始化顺序：base class更早于其derived class，成员变量总以类中的成员变量的声明顺序被初始化，而非member initialization list中的出现顺序，最好总是成员初值列最好依照声明次序
+
+编译单元（translation unit）指产出单一目标文件（single object file）的源码，基本上是单一源码文件加上其所包含的头文件
+
+C++对于不同编译单元内的non-local static对象的初始化次序没有明确定义（当多个编译单元内的non-local static对象经由模板隐式实例化（implicit template instantiation）形成是，往往很难寻找正确的初始化次序）
+
+```C++
+// FileSystem.h
+extern FileSystem tfs; // non-local static对象
+
+// Directory.h
+class Directory {
+public:
+	Directory() {
+		std::size_t disks = tfs.numDisks();
+	}
+};
+Directory tempDir(); // non-local static对象，用到别的编译单元内的non-local static对象tfs，可能tfs还未初始化
+```
+
+应该使用reference-returning函数修改为（Singleton模式）
+
+```C++
+// FileSystem.h
+FileSystem& tfs() {
+	static FileSystem fs;
+	return fs;
+}
+	
+// Directory.h
+class Directory {
+public:
+	Directory() {
+		std::size_t disks = tfs().numDisks();
+	}
+};
+Directory& tempDir() {
+	static Directory td;
+	return td;
+}
+```
+
+C++保证对于函数内的local static对象会在该函数被调用期间首次遇上该对象的定义式的时候被初始化，因此对于不同编译单元内的non-local static对象，将其移入自己的专属函数内，并声明为static，这样变成了一个local static对象，保证能够获得经历初始化的对象
+
+任何non-const static对象（不论local还是non-local）在多线程情况下都会有问题
+
+多线程环境下往往在单线程启动阶段手工调用所有reference-returning函数，然后启动多线程
+
+
+
+
+
+
+
+
+## Chapter 2 Constructors, destructors, and assignment operators
+
+
+### Item 5: Know what functions C++ silently writes and calls
+
+class的base class自身声明有virtual析构函数是，编译器产生的析构函数也为virtual的，virtualness来自base class；否则编译器产生的析构函数是non-virtual的
+
+编译器生成的copy构造函数和copy assignment函数，只是将对象的每一个non-static成员变量拷贝到目标对象
+
+当类含有reference成员，或者内含const成员，或者他的base class将copy assignment声明为private，编译器不会为这个类生成一个copy assignment
+
+
+### Item 7: Declare destructors virtual in polymorphic base classes
+
+一般情况下，只有当class内含至少一个virtual函数时，才为他声明virtual析构函数
+
+带有pure virtual析构函数的类是抽象类，往往被当做base class使用，因此当derived class对象被析构时需要调用base class的析构函数，因此需要给pure virtual析构函数提供一个定义，即
+
+```C++
+class AWOV {
+public:
+	virtual ~AWOV() = 0; // pure virtual析构函数的声明
+};
+AWOV::~AWOV() {} // pure virtual析构函数的定义
+```
+
+为base class声明一个virtual析构函数只适用于polymorphic base class，即多态性质的基类，为了用来通过base class接口处理derived class对象
+
+Uncopyable和input_iterator_tag等被设计作为base class，但并不为了经由base class接口处理derived class对象，因此不需要virtual析构函数
+
+std::string等并不应该被作为base class使用
+
+
+### Item 8: Prevent exceptions from leaving destructors
+
+C++11中析构函数默认noexcept
+
+如果某个操作可能在失败时抛出异常，又必须处理这个异常，让这个异常来自于析构函数以外的普通函数
+
+
+### Item 9: Never call virtual functions during construction or destruction
+
+在derived class对象的base class对象构造期间，对象的类型是base class而derived class；在析构过程中的base class析构期间，对象的类型也是base class，对virtual函数的调用不会下降至derived class，即不会调用客户端期望调用的virtual函数版本（derived class版本）
+
+
+### Item 10: Have assignment operators return a reference to *this
+
+为了实现连锁赋值
+
+
+### Item 11: Handle assignment to self in operator=
+
+使用简单的证同测试能够具备自我赋值安全性，但是不能保证异常安全性
+
+保证异常安全性往往自动获得自我赋值安全性，因此保证异常安全性的情况下往往不去管自我赋值安全性（如果添加证同测试，会使代码变大，并降低执行速度，并且带来的效率提高由于自我赋值频率很低往往得不偿失）
+
+使用copy and swap来代替手工排列语句实现异常安全
+
+```C++
+Widget& Widget::operator= (const Widget& rhs) {
+	Widget tmp(rhs); // copy
+	swap(temp); // swap
+	return temp;
+}
+```
+
+
+### Item 12: Copy all parts of an object
+
+让derived class的copy函数调用相应的base class函数 
+
+当copy构造函数和copy赋值函数有重复代码时，应当将重复代码放入第三个函数中，然后让这两者共同调用；因为copy构造函数只能用于初始化对象，而copy赋值函数只能施行于已初始化对象
+
+
+
+
+
+
+
+
+
+
+## Chapter 6 Inheritances and Oriented-Object Designs
+
+
+### Item 40: Use multiple inheritance judiciously
+
+钻石型继承`File <- InputFile / OutputFile <- IOFile`
+
+对于File类中的fileName成员，IOFile的缺省做法是从InputFile和OutputFile中分别继承fileName；如果使得File称为虚基类函数，即`File <-{virtual}- InputFile / OutputFile <- IOFile`，那么IOFile中只含有一个fileName
+
+正确行为来看，public继承应该总是virtual的
+
+virtual继承会使体积比non-virtual继承的体积大；virtual base class的初始化规则很复杂。因此非必要不使用virtual继承；如果必须使用virtual继承，则尽量避免在virtual base class中放置数据，避免初始化和赋值的问题（类似java和C#中的interface）
+
+
+
+
+
 ## Chapter 7 Templates and Generic Programming
 
 ### Item 41: Understand implicit interfaces and compile-time polymorphism
