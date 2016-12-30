@@ -63,13 +63,19 @@ const成员函数的意义有两种：
 ```C++
 class CTextBlock {
 public:
-	char & operator[](std::size_t position) const {
+	char & operator[] (std::size_t position) const { // bitwise const，即pText指向内容不是const
 		return pText[position];
 	}
+	
+	char * const & getText() const { // bitwise const，即pText为const，但是指向内容不是const
+		return pText;
+	}
+	
 private:
 	char * pText;
 };
 ```
+
 	2. Logical constness，const成员函数可以修改对象内部某些bit，只要客户端侦测不出即可；可以使用mutable（effective modern C++ item 16）
 	
 对于const和non-const成员函数中的重复，使用non-const成员函数调用其const版本，其中需要借助static_const和const_cast
@@ -219,6 +225,250 @@ Widget& Widget::operator= (const Widget& rhs) {
 让derived class的copy函数调用相应的base class函数 
 
 当copy构造函数和copy赋值函数有重复代码时，应当将重复代码放入第三个函数中，然后让这两者共同调用；因为copy构造函数只能用于初始化对象，而copy赋值函数只能施行于已初始化对象
+
+
+
+
+
+
+## Chapter 3 Resource Management
+
+
+
+### Item 13: Use objects to manage resources
+
+获得资源立即放入管理对象内，资源取得时机就是初始化时机（RAII，Resource Acquisition Is Initialization）
+
+管理对象运动析构函数确保资源被释放
+
+使用shared_ptr，不要用auto_ptr
+
+并没有针对动态数组设计的shared_ptr，使用vector、string替换动态数组
+
+
+
+### Item 14: Think carefully about copying behavior in resource-managing classes
+
+资源的复制行为决定RAII对象的复制行为
+
+RAII对象的复制处理通常使用##禁止复制##或者##对底层资源使用引用计数法（reference-count）##实现
+
+对底层资源使用引用计数法（reference-count）可以使用shared_ptr成员变量实现，并且对于Mutex这类资源，可以定制其引用计数为0时的行为（以unlock为删除器）；析构函数不需要涉及shared_ptr成员变量，资源的释放行为已经设置为shared_ptr的删除器，并且在引用计数为0时自动调用了删除器执行资源释放行为
+
+RAII对象的复制还可以采用##复制底部资源##或者##转移底部资源的拥有权##的方式实现
+
+
+
+### Item 15: Provide access to raw resources in resource-managing classes
+
+将RAII对象转换为内含的原始资源有显式转换和隐式转换两种方式
+
+shared_ptr提供get成员函数实行显式转换
+
+shared_ptr重载了指针取值（pointer dereferencing）操作符（operator->和operator*），允许隐式转换为原始指针
+
+RAII设计者还可以提供一个隐式类型转换函数直接转换为内含的原始资源类型，但是容易被误用
+
+```C++
+class Font {
+public:
+	explicit Font(FontHandle fh) : f(fh) {} // 获得资源FontHandle
+	~Font() { releaseFont(f); }
+	
+	FontHandle get() const { return f; } // 显式转换函数
+	operator FontHandle() const { return f; } // 隐式转换函数
+};
+```
+
+
+
+### Item 16: Use the same form in corresponding uses of new and delete
+
+new返回的出来的单一对象的内存布局不同于数组的内存布局，数组所用的内存通常还包括数组大小的记录
+
+使用delete[]使得delete认定指针指向一个数组
+
+成对使用new和delete，以及new[]和delete[]
+
+不要对数组形式使用typedef，容易忘记使用delete[]
+
+
+### Item 17: Store newed objects in smart pointers in standalone statements
+
+Effective modern C++ Item 21
+
+
+
+
+
+
+
+
+## Chapter 4 Designs and Declarations
+
+
+### Item 18: Make interfaces easy to use correctly and hard to be incorrectly
+
+Shared_ptr自动使用每个指针专属的删除器，防止cross-DLL problem（对象在DLL中被new创建，却在另一个DLL中被delete销毁），缺省的删除器来自shared_ptr诞生所在的那个DLL中的delete
+
+
+### Item 19: Treat class design as type design
+
+新的type对象应该如何被创建和销毁
+
+对象的初始化和对象的赋值该有什么样的差别
+
+新type的对象如果被passed-by-value意味着什么
+
+什么是新type的合法值
+
+新type需要配合某个继承图系么
+
+新type需要什么样的转换
+
+什么样的操作符和函数对此新type而言是合理的
+
+什么样的标准函数应该驳回
+
+谁取去用新type的成员
+
+什么事新type的未声明接口
+
+新type有多么一般化
+
+真的需要一个新type么
+
+
+### Item 20: Prefer pass-by-reference-to-const to pass-by-value
+
+缺省情况下c++以by value方式（继承自C）传递对象
+
+以by reference方式传递参数可以避免对象切割（slicing）问题（derived class对象以by value方式传递并被视作一个base class时， 调用base class的拷贝构造函数，新对象丢失了derive部分的所有信息）
+
+C++编译器往往底层使用指针实现reference，因此对于内置类型，往往pass by value比pass by reference to const效率高
+
+STL的迭代器和函数对象习惯上被设计为pass by value
+
+
+
+### Item 21: Don't try to return a reference when you must return an object
+
+返回reference to local对象会出现悬空引用问题
+
+不要让函数返回一个指针或引用指向local stack对象，也不要返回一个引用指向一个heap-allocated对象
+
+合理的返回指向local static对象的引用的例子是item4中的singleton模式
+
+一个必须返回新对象的函数的正确写法就是让函数返回一个新对象
+
+
+
+### Item 22: Declare data members private
+
+将成员变量隐藏在函数接口背后可以为所有可能的实现提供弹性，相当于Delphi和C#中的properties
+
+protected成员封装性并不高于public（item23）
+
+封装性与当其内容改变时可能造成的代码破坏量成反比
+
+
+
+### Item 23: Prefer non-member non-friend functions to member functions
+
+
+封装性越好，越多东西被封装，则越少人可以看到他，反之亦然
+
+成员变量应该为private，否则就会有无穷多的函数可以访问，带来零封装性
+
+对于一个类，要在提供相同功能的member函数和non-member non-friend函数中做取舍，选择较大封装性的non-member non-friend函数，他不会增加能访问class内部private成员的函数数量，不会降低封装性（这里non-member函数不意味着一定要是非成员函数，而是指针对这个类而言，不是这个类的成员函数；这个non-member函数也可以是别的类的函数，例如实现大量遍历功能函数的util类的一个功能函数）
+
+```C++
+Class WebBrowser {
+Public:
+	Void clearCache();
+	Void clearHistory();
+	Void removeCookies();
+	
+	Void clearEverything() { // member函数版本
+		clearCache();
+		clearHistory();
+		removeCookies();
+	}
+};
+
+Void clearBrowser(WebBrowser & wb) { // non-member non-friend版本
+	wb.clearCache();
+	wb.clearHistory();
+	wb.removeCookies();
+}
+```
+
+对于一个类以及相关的便利函数，可以将这些便利函数按照功能放入多个头文件内，隶属于同一个名空间中，方便客户轻松扩展新的便利函数，这是在类中使用member函数无法做到的，class定义式对客户而言无法扩展，C++标准库即是按照这种组织形式
+
+
+### Item 24: Declare non-member functions when type conversions should apply to all parameters
+
+通常让class支持隐式类型转换不是好方案
+
+对于支持和整数进行乘法运算的有理数类
+
+```C++
+class Rational {
+public:
+	Rational(int numerator = 0, int denominator = 1); // 支持整数到有理数类的类型转换
+	const Rational operator* (const Rational& rhs) const; // 不支持2 * rational
+};
+
+const Rational operator* (const Rational& lhs, const Raional& rhs); // 支持2 * rational
+```
+
+
+### Item 25: Consider support for a non-throwing swap
+
+对于自行提供的swap版本（应用于Impl手法实现的类等场景），需要：
+
+	1. 提供一个public swap成员函数真正执行置换
+	2. 在类或类模板所在名空间内提供一个non-member swap，令其调用上述public swap成员函数
+	3. 如果是类而非类模板，还要为类特化std::swap，并让特化版本调用swap成员函数（这样能让专属版swap能在尽可能多的语境下被调用），通常不允许改变std名空间内的任何东西，但被允许为标准template制造特化版本
+第2点对于类模板应该在所在名空间中使用重载swap方式提供non-member swap
+
+```C++
+namespace WidgetStuff {
+	template<class T>
+	class Widget;
+
+	template<typename T> 
+	void swap(Widget<T> & a, Widget<T> & b) { a.swap(b); } // 对std::swap的重载，swap后没有<…>
+}
+```
+
+第3点不能应用于类模板，特化std::swap会导致对函数模板的偏特化
+
+```C++
+Template<class T>
+class Widget;
+
+namespace std {
+	template<typename T> 
+	void swap<Widget<T>>(Widget & a, Widget & b) { a.swap(b); } // 错误，函数模板不允许偏特化
+}
+```
+
+
+客户在调用swap时，先`using std::swap;`使得std内的swap可见，再直接调用没有任何名空间修饰的swap，让编译器根据C++的名称查找法则决定调用哪一个swap，加上名空间修饰符的swap会影响编译器的名称查找
+
+成员版swap是noexcept的，是帮助提供强异常安全性的保证（item29）；非成员版swap可能抛出异常，因为默认情况下会调用copy构造函数和copy赋值函数
+
+自定义的swap往往是对内置类型的操作，因此需要尽量提供高效置换的方法，并且尽量不抛出异常
+
+
+
+
+
+
+
+
+
 
 
 
