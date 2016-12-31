@@ -469,6 +469,106 @@ namespace std {
 
 
 
+## Chapter 5 Implementations
+
+
+### Item 26: Postpone variable definitions as long as possible
+
+尽量延后变量的定义，避免构造和析构不必要的对象
+
+尝试延后变量的定义直到能够给他初值实参为止，避免无意义的default构造行为，而是直接使用给出的构造参数进行构造，顺带起到说明构造对象的信息的目的
+
+循环中使用的变量，放到内可能会有构造和析构的开销，放到外部会使变量的作用域扩大降低可维护性，需要权衡
+
+
+### Item 27: Minimize casting
+
+C++风格转型
+
+const_cast<T>(expr)
+dynamic_cast<T>(expr)
+reinterpret_cast<T>(expr)
+static_cast<T>(expr)
+
+相比旧式转型，新式转型容易辨识，并且将转型动作目标
+
+尽量使用新式转型
+
+类型转换（转型操作的显示转换或者编译器完成的隐式转换）往往会零编译器编译出运行期的执行码，例如int转型为double会由于底层表述不同，derived*转型为base*可能会由于两个指针值的不同在指针上施行偏移量
+
+唯一使用旧式转型的时机是调用explicit构造函数将对象传递给函数
+
+在dereived class的virtual函数中调用base class的对应函数，需要调用base class名称修饰的函数；而不能对*this进行static_cast类型转换，这个类型转换会创造一个当前对象的base class成分的副本对象
+
+替代dynamic_cast（即不使用base class的指针或引用转型成derived class的指针或引用，意图调用只有derived class才会具有的能力）的方式：
+
+	1. 直接存储指向derived class对象的指针或引用
+	2. 通过base class接口处理所有可能的各种派生类，即在base class中提供virtual函数实现所有派生类可能拥有的功能，对于不具有该功能的base class，提供一份空的virtual函数实现
+
+必须要转型，则将其隐藏于某个函数之后，而非让转型出现在客户代码之中
+
+
+### Item 28: Avoid returning "handles" to object internals
+
+Item3中的例子，成员的封装性最多只等于返回其reference的函数的访问级别，如果const成员函数传出一个reference，后者并不存储于对象中（不是对象的成员变量，但是对象的成员变量指向他，并且逻辑上视作对象的内部）
+
+返回一个handle代表对象的内部部分往往会导致悬空指针或引用，但是有时不得不避免这类问题，例如operator[]函数等需要存取容器内部的元素
+
+
+### Item 29: Strive for exception-safe code
+
+异常安全的函数会：不泄露资源；不允许数据被破坏
+
+异常安全函数提供三个保证之一：
+
+	1. 基本承诺，如果抛出异常，程序内任何事物仍然有效状态下，没有对象或者数据结构因此破坏，但是程序的现实状态不可以聊
+	2. 强烈保证，如果抛出异常，程序状态不改变，即如果函数失败，程序回到调用前的状态
+	3. nothrow保证，即从不抛出异常
+
+Copy and swap：为要修改的对象制作副本，然后在副本上做修改，待一切修改成功后才将副本和原对象使用nothrow的swap操作置换
+
+Copy and swap往往可以实现强安全保证
+
+函数f依次调用了f1和f2，即使f1和f2都是强类型安全的，也不能保证f是强类型安全的，如果f1成功而f2失败，则状态永远退回不到f1被调用之前的状态
+
+
+### Item 30: Understand the ins and outs of inlining
+
+inline是对编译器的申请
+
+函数定义与class内部是一种隐式inline，通常是成员函数，也可能是friend函数
+
+一般情况下inline和template都置于头文件中，但是template的实例化和inline无关；inline通常是编译期行为，inline通常一定被置于头文件内，编译器为了进行函数调用需要知道函数的定义；template通常被置于头文件内，一旦被使用，编译器为了实例化需要知道他的定义，通常实例化是编译期行为
+
+virtual函数往往不会被inline，需要运行期决定调用那个函数
+
+取inline函数的地址往往不会被inline，而是会生成一个outlined函数本体
+
+编译器往往会在编译期间产生对象创建和销毁相关的代码并插入到构造函数和析构函数中，因此构造函数和析构函数往往不会被inline
+
+inline无法随着程序库的升级而升级，一旦f被改变需要重新编译，而non-inline函数只要重新连接即可
+
+
+
+### Item 31: Minimize compilation dependencies between files
+
+C++没有做好“接口从实现中分离”，class的定义式不仅包含接口（成员函数）还包含实现细目（成员变量）；编译一个class需要取得其所有成员变量类型的定义式（需要在编译期间决定对象的大小），因此需要include所有定义式所在的头文件，带来文件之间的依赖性
+
+C++可以通过pimpl手法，通过成员指针指向实现细节，实现实现细节和接口分离；以声明的依存性替换定义的依存性；类似java等语言，成员变量均是引用而非值
+
+编译依存性最小化的本质：让头文件尽可能自我满足，如果不能满足就让他与其他文件内的声明式（而非定义式）相依
+
+编译依存性最小化：
+
+	1. 如果使用object reference或object pointer可以就不要使用object
+	2. 尽量以class声明式代替class定义式 ???
+	3. 为声明式和定义式提供不同的头文件，但是需要保持一致性 iosfwd ???
+
+使用pimpl idiom的class通常称为handle class，将所有函数转交给相应的实现类
+
+interface class也可以将声明式和定义式分离，是一种特殊的abstract class，通常不带成员变量，没有构造函数，只有一个virtual析构函数（item7）和一组pure virtual函数，用于描述整个接口；interface class通常使用factory函数（item13）或virtual构造函数？？？构造真正的derived class对象
+
+程序库头文件应该以完全且仅有声明式的形式存在，不论是否涉及template都适用
 
 
 
