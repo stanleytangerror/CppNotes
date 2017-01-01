@@ -2,6 +2,7 @@
 
 
 
+
 ## Chapter 1 Accustoming yourself to C++
 
 
@@ -14,7 +15,7 @@ C++中的主要次语言（sublanguage）有四个：C；object-oriented C++；t
 
 ### Item 2: Prefer consts, enums, and inlines to #defines
 
-#define被预处理器处理，不进入符号表
+宏#define被预处理器处理，不进入符号表
 
 尽量使用std::string而非char*-based
 
@@ -24,7 +25,7 @@ class专属的static的整数类型常量，如果不取他们的地址且不需
 
 在声明时获得初值的class常量，不能在定义时再设置初值
 
-#define不重视作用域，因此不能用来定义class专属常量
+宏#define不重视作用域，因此不能用来定义class专属常量
 
 In-class初值设定只能对整数常量进行，如果不支持整数常量的in-class初值设定，则可以使用“the enum hack”
 
@@ -572,6 +573,110 @@ interface class也可以将声明式和定义式分离，是一种特殊的abstr
 
 
 
+
+
+
+
+## Chapter 6 Inheritances and Oriented-Object Designs
+
+
+### Item 32: Make sure public inheritance models "is-a"
+
+public继承以为这is-a关系，B对象可用的任何地方，D对象也可以，D对象也是一个B对象
+
+
+
+### Item 33: Avoid hiding inherited names
+
+当derived class成员函数内refer to base class中的内容，编译器将derived class作用于嵌套在base class作用域内，进行名称查找
+
+作用域名称遮掩规则，base class和derived class中函数名相同，即使他们参数类型不同，derived class函数也会遮掩base class函数，原理是为了防止新的derived class从base class继承重载函数
+
+使用using声明式继承base class中被遮掩的重载函数，using会使得base class中所有同名函数都可见（不同参数，不同constness等）
+
+public继承中不要让derived class内的名称遮掩base class中的名称（如果derived class重写了base class中的函数需要使用using声明式继承base class中被覆盖的函数，不然会违反item22中is-a的关系，即derived class不再拥有base class被覆盖的特性）
+
+private继承中，如果仅想继承一个特定的base class重载函数，定义一个名称相同的derived class函数，并令其调用base class中想要继承的那个函数（使用using会使得所有同名函数都可见），称为forwarding函数
+
+
+
+### Item 34: Differentiate between inheritance of interface and inheritance of implementation
+
+public继承由函数接口继承和函数实现继承两部分组成
+
+可以为prue virual函数提供定义，但是只能通过明确指出其class名称的方式被调用
+
+impure virtual函数提供了一份函数的缺省实现，声明impure virtual函数的目的是让derived class继承其接口和缺省实现
+
+可以使用“pure virtual函数替代并给出一个pure virtual函数的定义或给出一个普通的进行缺省行为的函数的定义“替代impure virtual函数，并且这种替代方式切断了virtual函数接口和其缺省实现的连接；如果提供pure virtual函数提供定义则不能单独对其实行访问控制；如果提供一份进行缺省行为的函数的定义，则带来更多的class命名空间的污染
+
++ 声明一个pure virtual函数是为了让derived class只继承函数接口
++ 声明一个impure virtual函数是为了让derived class继承函数的接口及一份缺省实现
++ 声明一个non-virtual函数是为了让derived class继承函数的接口及一份强制性实现，non-virtual函数绝不该在derived class中被重新定义
+
+
+
+### Item 35: Consider alternatives to virtual functions
+
+derived class可以重新定义virtual函数，即使derived class无法调用他
+
+使用non-virtual interface手法实现template method模式（与C++template无关），即non-virtual函数作为一个接口（称为wrapper）不变，调用实际进行工作的private（或protected） virtual函数
+
+函数指针或者tr1::function实现的strategy模式，同一类型不同对象可以有不同的做法，并且可以在运行期替换
+
+传统的strategy模式，将对应功能的函数做成一个分离的继承体系中的virtual成员函数
+
+将实现机能的部分作为外部函数或仿函数则不能访问non-public成员
+
+
+
+### Item 36: Never redefine an inherited non-virtual function
+
+如果在derived class中重新定义base class中的non-virtual函数，由于静态绑定，使得d->f()和((Base *)d)->f()调用结果不同
+
+不应该重新定义一个继承而来的non-virtual函数
+
+
+
+### Item 37: Never redefine a function's inherited default parameter value
+
+virtual函数是动态绑定的，但是缺省函数是静态绑定的
+
+运行期效率是的C++采用了缺省参数值的静态绑定
+
+可以使用item35中NVI手法，让non-virtual函数指定缺省参数
+
+
+
+### Item 38: Model "has-a" or "is-implemented-in-terms-of" through composition
+
+在应用域，复合意味着”has-a”，在实现域，复合意味着“is-implemented-in-terms-of”
+
+
+### Item 39: Use private inheritance judiciously
+
+只有在public继承中，编译器会自动将一个derived class对象转换成一个一个base class对象（reference或指针转换）
+
+private继承而来的base class中的所有成员都是private的
+
+private继承意味着implemented-in-terms-of，意味着只继承实现，不继承接口，只是一种实现技术而非设计意义（继承而来的每样东西都是private，都是实现细节），为了采用base class中已经备妥的某些特性而非base class对象和derived class对象存在任何观念上的关系
+
+对于is-implemented-in-terms-of，尽量使用composition（item38），必要时才使用private继承
+
+使用private继承的一个情形是，在对空间利用非常激进的时候，对于一个不带任何non-static成员变量和virtual函数的类，使用private继承会获得空白基类优化，使用composition会由于C++对独立对象有非零大小的要求，有稍稍的空间浪费
+
+当derived class需要访问base class的protected成员，或者需要重新定义继承而来的virtual函数时，private继承是合理的（但是总是与设计无关，只是需要使用实现继承）
+
+
+### Item 40: Use multiple inheritance judiciously
+
+钻石型继承`File <- InputFile / OutputFile <- IOFile`
+
+对于File类中的fileName成员，IOFile的缺省做法是从InputFile和OutputFile中分别继承fileName；如果使得File称为虚基类函数，即`File <-{virtual}- InputFile / OutputFile <- IOFile`，那么IOFile中只含有一个fileName
+
+正确行为来看，public继承应该总是virtual的
+
+virtual继承会使体积比non-virtual继承的体积大；virtual base class的初始化规则很复杂。因此非必要不使用virtual继承；如果必须使用virtual继承，则尽量避免在virtual base class中放置数据，避免初始化和赋值的问题（类似java和C#中的interface）
 
 
 
